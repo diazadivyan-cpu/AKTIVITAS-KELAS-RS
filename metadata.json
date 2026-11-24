@@ -1,0 +1,11 @@
+{
+  "name": "Remix Remix Sistem Absensi \u0026 Kas Kelas R3S",
+  "description": "Sistem Absensi Real-Time (Foto, GPS, Timestamp) dan Transparansi Uang Kas Kelas R3S berbasis Oceanic Glassmorphism dan Supabase.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

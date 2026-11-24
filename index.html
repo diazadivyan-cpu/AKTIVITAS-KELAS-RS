@@ -1,0 +1,948 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aktivitas Kelas RS — Pusat Absensi &amp; Kas Kelas</title>
+    <meta
+      name="description"
+      content="Aktivitas Kelas RS — Pusat Absensi &amp; Kas Kelas R3S (Foto, GPS, Stempel Waktu) dan Transparansi Uang Kas Kelas bertema Antariksa &amp; Galaksi."
+    />
+    <meta property="og:title" content="Aktivitas Kelas RS — Pusat Absensi &amp; Kas Kelas" />
+    <meta
+      property="og:description"
+      content="Aktivitas Kelas RS — Pusat Absensi &amp; Kas Kelas R3S dengan Kamera Langsung, GPS &amp; Transparansi Kas."
+    />
+    <meta property="og:type" content="website" />
+
+    <!-- Google Fonts: Plus Jakarta Sans (Display), DM Sans (Body), JetBrains Mono (Tabular Numerals) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Supabase JS SDK v2 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- QRCode Generator CDN untuk QRIS Dinamis EMVCo Scannable -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+
+    <link rel="stylesheet" href="./style.css" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('r3s_theme_v1');
+          var theme = saved === 'light' || saved === 'dark' ? saved : 'dark';
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- COVER ANIMASI LANGIT & GALAKSI REAL-TIME WIB (GLOBAL: LOGIN & INDEX) -->
+    <div id="sky-dome" class="login-cover-sky sky-night" aria-hidden="true">
+      <div class="sky-horizon-glow" id="sky-horizon-glow"></div>
+      <svg class="login-cover-svg" viewBox="0 0 1440 820" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <radialGradient id="sunOrbGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#fffbeb" />
+            <stop offset="45%" stop-color="#fde047" />
+            <stop offset="100%" stop-color="#f97316" />
+          </radialGradient>
+          <radialGradient id="sunAuraGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(253, 224, 71, 0.72)" />
+            <stop offset="45%" stop-color="rgba(251, 146, 60, 0.3)" />
+            <stop offset="100%" stop-color="rgba(251, 146, 60, 0)" />
+          </radialGradient>
+          <radialGradient id="moonAuraGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(186, 230, 253, 0.55)" />
+            <stop offset="55%" stop-color="rgba(129, 140, 248, 0.2)" />
+            <stop offset="100%" stop-color="rgba(129, 140, 248, 0)" />
+          </radialGradient>
+        </defs>
+
+        <!-- Bintang & Galaksi Malam / Fajar pada Cover -->
+        <g id="sky-stars-group" class="sky-stars-group">
+          <circle cx="95" cy="86" r="1.8" fill="#e0f2fe" opacity="0.85" />
+          <circle cx="195" cy="142" r="2.1" fill="#ffffff" opacity="0.9" />
+          <circle cx="290" cy="64" r="1.5" fill="#c7d2fe" opacity="0.8" />
+          <circle cx="410" cy="96" r="1.9" fill="#fef08a" opacity="0.85" />
+          <circle cx="530" cy="48" r="1.6" fill="#ffffff" opacity="0.9" />
+          <circle cx="655" cy="112" r="1.4" fill="#bae6fd" opacity="0.75" />
+          <circle cx="790" cy="54" r="2.0" fill="#ffffff" opacity="0.9" />
+          <circle cx="920" cy="94" r="1.7" fill="#ddd6fe" opacity="0.8" />
+          <circle cx="1060" cy="58" r="1.8" fill="#ffffff" opacity="0.9" />
+          <circle cx="1185" cy="126" r="2.1" fill="#bae6fd" opacity="0.85" />
+          <circle cx="1310" cy="78" r="1.7" fill="#ffffff" opacity="0.9" />
+          <circle cx="1375" cy="186" r="1.6" fill="#c7d2fe" opacity="0.75" />
+          <circle cx="72" cy="240" r="1.5" fill="#ffffff" opacity="0.7" />
+          <circle cx="1340" cy="285" r="1.5" fill="#e0f2fe" opacity="0.7" />
+        </g>
+
+        <!-- Awan Tipis Atmosfer (Muncul saat Pagi / Siang / Sore) -->
+        <g id="sky-clouds-group" class="sky-clouds-group">
+          <ellipse cx="220" cy="165" rx="95" ry="22" fill="rgba(255,255,255,0.2)" />
+          <ellipse cx="265" cy="158" rx="68" ry="18" fill="rgba(255,255,255,0.24)" />
+          <ellipse cx="1210" cy="180" rx="105" ry="24" fill="rgba(255,255,255,0.18)" />
+          <ellipse cx="1165" cy="172" rx="70" ry="18" fill="rgba(255,255,255,0.22)" />
+        </g>
+
+        <!-- Busur Orbit Harian Cover (Timur -> Tengah / Zenit -> Barat) -->
+        <path
+          class="sky-orbit-arc"
+          d="M 70 590 Q 720 -434 1370 590"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.22)"
+          stroke-width="1.6"
+          stroke-dasharray="7 10"
+        />
+
+        <!-- Matahari Real-Time (06:00 - 18:00 WIB) -->
+        <g id="celestial-sun" transform="translate(720, 78)">
+          <circle cx="0" cy="0" r="96" fill="url(#sunAuraGrad)" class="celestial-pulse" />
+          <circle cx="0" cy="0" r="46" fill="rgba(253, 224, 71, 0.25)" />
+          <circle cx="0" cy="0" r="28" fill="url(#sunOrbGrad)" />
+        </g>
+
+        <!-- Bulan & Galaksi Malam (18:00 - 06:00 WIB) -->
+        <g id="celestial-moon" transform="translate(720, 78)">
+          <circle cx="0" cy="0" r="76" fill="url(#moonAuraGrad)" class="celestial-pulse" />
+          <circle cx="0" cy="0" r="26" fill="#e2e8f0" class="moon-orb-fill" />
+          <circle cx="9" cy="-6" r="22" fill="#0f172a" opacity="0.84" class="moon-crater-cut" />
+        </g>
+
+        <!-- Siluet Cakrawala Planet / Pegunungan Bawah Cover -->
+        <path
+          class="sky-mountain-back"
+          d="M0,700 L140,664 L290,692 L470,652 L660,686 L860,648 L1080,684 L1260,658 L1440,690 L1440,820 L0,820 Z"
+          fill="rgba(4, 7, 20, 0.45)"
+        />
+        <path
+          class="sky-mountain-front"
+          d="M0,742 L210,708 L440,738 L720,704 L980,736 L1240,706 L1440,732 L1440,820 L0,820 Z"
+          fill="rgba(3, 5, 16, 0.62)"
+        />
+
+        <!-- Penanda Arah Timur & Barat pada Cakrawala Cover -->
+        <text class="sky-horizon-label" x="48" y="628" fill="rgba(241, 245, 249, 0.78)" font-size="13" font-family="DM Sans, sans-serif" font-weight="600">
+          Timur · Terbit (06:00)
+        </text>
+        <text class="sky-horizon-label" x="1392" y="628" text-anchor="end" fill="rgba(241, 245, 249, 0.78)" font-size="13" font-family="DM Sans, sans-serif" font-weight="600">
+          Barat · Terbenam (18:00)
+        </text>
+      </svg>
+    </div>
+
+    <!-- Lapisan Latar Belakang Antariksa & Galaksi (Nebula, Bintang, Lintasan Orbit) -->
+    <div id="space-backdrop" class="space-backdrop" aria-hidden="true">
+      <div class="nebula-cloud nebula-1"></div>
+      <div class="nebula-cloud nebula-2"></div>
+      <div class="nebula-cloud nebula-3"></div>
+      <div class="stars-layer" id="stars-layer"></div>
+      <div class="shooting-star shooting-1"></div>
+      <div class="shooting-star shooting-2"></div>
+      <svg class="cosmic-orbit-top" viewBox="0 0 1440 130" preserveAspectRatio="none">
+        <path
+          d="M-40,18 Q720,126 1480,18"
+          fill="none"
+          stroke="var(--orbit-stroke)"
+          stroke-width="1.2"
+          stroke-dasharray="6 8"
+        ></path>
+        <path
+          d="M0,0 L1440,0 L1440,36 Q720,92 0,36 Z"
+          fill="var(--horizon-tint)"
+        ></path>
+      </svg>
+    </div>
+
+    <!-- Kontainer Notifikasi Toast -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- =================================================================== -->
+    <!-- VIEW 1: HALAMAN AUTENTIKASI (LOGIN & LUPA PASSWORD MANDIRI)         -->
+    <!-- =================================================================== -->
+    <section id="auth-screen" class="auth-screen">
+      <div class="auth-cover-layout">
+        <div class="auth-shell glass-panel">
+          <!-- Kolom Kiri: Identitas Kelas R3S & Jam WIB (Tanpa Widget Animasi di Dalam Kartu) -->
+          <div class="auth-brand-pane">
+            <div class="auth-brand-top">
+              <div class="auth-brand-header-row">
+                <div class="luminescent-ring logo-lg">
+                  <img
+                    src="./logo-r3s.jpg"
+                    alt="Logo Kelas R3S"
+                    referrerpolicy="no-referrer"
+                    onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                  />
+                  <div class="logo-fallback" style="display: none">R3S</div>
+                </div>
+                <button
+                  type="button"
+                  class="btn-theme-toggle"
+                  data-theme-toggle
+                  aria-label="Ubah tema terang atau gelap"
+                  title="Ubah tema tampilan"
+                >
+                  <span class="theme-toggle-icon" aria-hidden="true"></span>
+                  <span class="theme-toggle-label">Tema Terang</span>
+                </button>
+              </div>
+
+              <div class="auth-brand-copy">
+                <span class="meta-line">Pusat Absensi &amp; Kas Kelas · Kelas R3S</span>
+                <h1>Aktivitas Kelas RS</h1>
+                <p>
+                  Verifikasi kehadiran anti-titip absen dengan kamera langsung, koordinat GPS, dan penanda waktu WIB,
+                  serta buku kas kelas yang terbuka untuk seluruh anggota.
+                </p>
+              </div>
+            </div>
+
+            <div class="auth-clock-card">
+              <span class="meta-line">Waktu Server Indonesia Barat</span>
+              <div id="auth-clock-display" class="clock-tabular">Memuat jam WIB...</div>
+            </div>
+
+        </div>
+
+        <!-- Kolom Kanan: Form Login / Form Reset Password Mandiri -->
+        <div class="auth-form-pane">
+          <!-- Form Login -->
+          <form id="login-form" class="auth-form" autocomplete="on">
+            <div class="form-header">
+              <h2>Masuk ke Portal</h2>
+              <p>Gunakan nama pengguna dan kata sandi yang telah dibuatkan oleh Admin Kelas.</p>
+            </div>
+
+            <div class="field-group">
+              <label for="login-username">Username</label>
+              <input
+                type="text"
+                id="login-username"
+                name="username"
+                placeholder="Masukkan nama pengguna Anda"
+                required
+                autocomplete="username"
+              />
+            </div>
+
+            <div class="field-group">
+              <label for="login-password">Password</label>
+              <div class="input-with-action">
+                <input
+                  type="password"
+                  id="login-password"
+                  name="password"
+                  placeholder="Masukkan kata sandi"
+                  required
+                  autocomplete="current-password"
+                />
+                <button
+                  type="button"
+                  class="btn-icon-inline toggle-pw-btn"
+                  data-target="login-password"
+                  aria-label="Tampilkan atau sembunyikan kata sandi"
+                >
+                  Lihat
+                </button>
+              </div>
+            </div>
+
+            <div class="captcha-box">
+              <div class="captcha-prompt">
+                <span>Captcha Keamanan:</span>
+                <strong id="login-captcha-question" class="tabular-nums">0 + 0 = ?</strong>
+                <button
+                  type="button"
+                  id="btn-refresh-login-captcha"
+                  class="btn-link-inline"
+                  aria-label="Muat ulang captcha"
+                >
+                  Ganti Soal
+                </button>
+              </div>
+              <input
+                type="number"
+                id="login-captcha-answer"
+                placeholder="Ketik hasil hitungan di sini"
+                required
+              />
+            </div>
+
+            <div class="form-row-between">
+              <label class="checkbox-label">
+                <input type="checkbox" id="login-remember" />
+                <span>Ingat Saya (Simpan Kredensial)</span>
+              </label>
+              <button type="button" id="btn-goto-forgot" class="btn-link-inline">
+                Lupa Password?
+              </button>
+            </div>
+
+            <button type="submit" id="btn-login-submit" class="btn btn-primary btn-block">
+              Masuk
+            </button>
+          </form>
+
+          <!-- Form Lupa Password Mandiri -->
+          <form id="forgot-form" class="auth-form hidden" novalidate>
+            <div class="form-header">
+              <h2>Lupa Password Mandiri</h2>
+              <p>Verifikasi nama pengguna Anda terlebih dahulu sebelum membuat kata sandi baru.</p>
+            </div>
+
+            <div class="field-group">
+              <label for="forgot-username">Username Terdaftar</label>
+              <div class="input-with-btn">
+                <input
+                  type="text"
+                  id="forgot-username"
+                  placeholder="Ketik nama pengguna Anda"
+                  required
+                />
+                <button type="button" id="btn-verify-username" class="btn btn-secondary">
+                  Verifikasi Username
+                </button>
+              </div>
+            </div>
+
+            <div id="forgot-verified-card" class="verified-user-box hidden">
+              <div class="verified-user-meta">
+                <span>Akun Terverifikasi</span>
+                <strong id="forgot-verified-name">-</strong>
+                <small id="forgot-verified-username">@-</small>
+              </div>
+            </div>
+
+            <div id="forgot-step-2" class="hidden">
+              <div class="field-group">
+                <label for="forgot-new-password">Password Baru</label>
+                <div class="input-with-action">
+                  <input
+                    type="password"
+                    id="forgot-new-password"
+                    maxlength="8"
+                    placeholder="Maksimal 8 karakter"
+                    required
+                  />
+                  <button
+                    type="button"
+                    class="btn-icon-inline toggle-pw-btn"
+                    data-target="forgot-new-password"
+                  >
+                    Lihat
+                  </button>
+                </div>
+                <ul class="pw-rules-list" id="forgot-pw-rules">
+                  <li data-rule="length">Maksimal 8 karakter (minimal 3 karakter)</li>
+                  <li data-rule="digit">Minimal 1 angka (0-9)</li>
+                  <li data-rule="symbol">Minimal 1 simbol (!@#$%^&amp;* dll.)</li>
+                </ul>
+              </div>
+
+              <div class="field-group">
+                <label for="forgot-confirm-password">Konfirmasi Password Baru</label>
+                <input
+                  type="password"
+                  id="forgot-confirm-password"
+                  maxlength="8"
+                  placeholder="Ulangi kata sandi baru"
+                  required
+                />
+              </div>
+
+              <div class="captcha-box">
+                <div class="captcha-prompt">
+                  <span>Captcha Keamanan:</span>
+                  <strong id="forgot-captcha-question" class="tabular-nums">0 + 0 = ?</strong>
+                  <button type="button" id="btn-refresh-forgot-captcha" class="btn-link-inline">
+                    Ganti Soal
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  id="forgot-captcha-answer"
+                  placeholder="Ketik hasil hitungan"
+                  required
+                />
+              </div>
+
+              <button type="submit" id="btn-save-new-password" class="btn btn-primary btn-block">
+                Simpan Password Baru
+              </button>
+            </div>
+
+            <div class="form-footer-actions">
+              <button type="button" id="btn-back-to-login" class="btn-link-inline">
+                &larr; Kembali ke Halaman Login
+              </button>
+            </div>
+          </form>
+        </div>
+        </div>
+
+        <!-- Bar Status Cover Langit Real-Time (Di luar kartu login) -->
+        <div class="login-cover-hud glass-panel">
+          <div class="login-cover-hud-info">
+            <strong id="celestial-phase-label" data-celestial-phase-label>Memuat fase langit...</strong>
+            <span id="celestial-clock-badge" data-celestial-clock-badge class="tabular-nums celestial-time-readout">--:-- WIB</span>
+          </div>
+          <div class="celestial-preview-bar" role="group" aria-label="Simulasi Posisi Waktu Langit Cover">
+            <button type="button" class="sky-time-btn active" data-sky-hour="live">Waktu Nyata WIB</button>
+            <button type="button" class="sky-time-btn" data-sky-hour="7">07:00 Terbit</button>
+            <button type="button" class="sky-time-btn" data-sky-hour="12">12:00 Tengah</button>
+            <button type="button" class="sky-time-btn" data-sky-hour="17">17:00 Terbenam</button>
+            <button type="button" class="sky-time-btn" data-sky-hour="22">22:00 Malam</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- VIEW 2: APLIKASI UTAMA (SPA BERBASIS TAB & RBAC 4 ROLE)             -->
+    <!-- =================================================================== -->
+    <div id="app-shell" class="app-shell hidden">
+      <!-- Backdrop Sidebar Mobile -->
+      <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
+
+      <!-- Sidebar Navigasi Dinamis -->
+      <aside id="app-sidebar" class="app-sidebar glass-panel">
+        <div class="sidebar-brand">
+          <div class="luminescent-ring logo-sm">
+            <img
+              src="./logo-r3s.jpg"
+              alt="Logo Kelas R3S"
+              referrerpolicy="no-referrer"
+              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+            />
+            <div class="logo-fallback" style="display: none">R3S</div>
+          </div>
+          <div class="sidebar-brand-text">
+            <strong>Aktivitas Kelas RS</strong>
+            <span class="sidebar-brand-subtitle">Pusat Absensi &amp; Kas Kelas</span>
+            <span id="sidebar-role-label">Portal Anggota</span>
+          </div>
+        </div>
+
+        <nav id="sidebar-nav" class="sidebar-nav" aria-label="Menu Utama"></nav>
+
+        <div class="sidebar-footer">
+          <button type="button" id="btn-logout" class="btn btn-danger-soft btn-block btn-sm">
+            Keluar Akun
+          </button>
+        </div>
+      </aside>
+
+      <!-- Area Utama Kanan -->
+      <div class="app-workspace">
+        <!-- Topbar Global: Jam Digital WIB & Profil Cepat -->
+        <header class="app-topbar glass-panel">
+          <div class="topbar-left">
+            <button
+              type="button"
+              id="btn-mobile-menu"
+              class="btn-mobile-menu"
+              aria-label="Buka menu navigasi"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </button>
+            <div class="topbar-brand">
+              <strong>Aktivitas Kelas RS</strong>
+              <span class="topbar-brand-sub">Pusat Absensi &amp; Kas Kelas</span>
+            </div>
+            <div class="topbar-clock-widget">
+              <span class="clock-label">Waktu WIB</span>
+              <time id="global-clock-wib" class="clock-value tabular-nums">Memuat...</time>
+            </div>
+          </div>
+
+          <div class="topbar-right">
+            <button
+              type="button"
+              class="btn-theme-toggle"
+              data-theme-toggle
+              aria-label="Ubah tema terang atau gelap"
+              title="Ubah tema tampilan"
+            >
+              <span class="theme-toggle-icon" aria-hidden="true"></span>
+              <span class="theme-toggle-label">Tema Terang</span>
+            </button>
+
+            <button
+              type="button"
+              id="btn-topbar-notif"
+              class="btn-notif"
+              aria-label="Buka kotak pemberitahuan"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              <span id="topbar-notif-count" class="notif-counter hidden tabular-nums">0</span>
+            </button>
+
+            <div class="topbar-user" id="topbar-user-trigger" role="button" tabindex="0">
+              <div class="topbar-avatar" id="topbar-avatar">A</div>
+              <div class="topbar-user-info">
+                <strong id="topbar-user-name">Pengguna</strong>
+                <span id="topbar-user-meta">NPM · Peran</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Bar Status & Kontrol Alur Waktu Langit Real-Time (Sama Seperti Halaman Login) -->
+        <div class="index-sky-hud-wrap">
+          <div class="login-cover-hud index-sky-hud glass-panel">
+            <div class="login-cover-hud-info">
+              <strong data-celestial-phase-label>Memuat fase langit...</strong>
+              <span data-celestial-clock-badge class="tabular-nums celestial-time-readout">--:-- WIB</span>
+            </div>
+            <div class="celestial-preview-bar" role="group" aria-label="Simulasi Posisi Waktu Langit Halaman Utama">
+              <button type="button" class="sky-time-btn active" data-sky-hour="live">Waktu Nyata WIB</button>
+              <button type="button" class="sky-time-btn" data-sky-hour="7">07:00 Terbit</button>
+              <button type="button" class="sky-time-btn" data-sky-hour="12">12:00 Tengah</button>
+              <button type="button" class="sky-time-btn" data-sky-hour="17">17:00 Terbenam</button>
+              <button type="button" class="sky-time-btn" data-sky-hour="22">22:00 Malam</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Kontainer Tab SPA Dinamis -->
+        <main id="main-content" class="main-content"></main>
+
+        <!-- Footer Cakrawala Antariksa -->
+        <footer class="app-footer">
+          <svg class="cosmic-horizon-bottom" viewBox="0 0 1440 80" preserveAspectRatio="none" aria-hidden="true">
+            <path
+              d="M0,56 Q720,0 1440,56 L1440,80 L0,80 Z"
+              fill="var(--horizon-tint)"
+            ></path>
+            <path
+              d="M0,56 Q720,0 1440,56"
+              fill="none"
+              stroke="var(--orbit-stroke)"
+              stroke-width="1"
+              stroke-dasharray="5 7"
+            ></path>
+          </svg>
+          <div class="footer-inner">
+            <span>Aktivitas Kelas RS · Pusat Absensi &amp; Kas Kelas R3S</span>
+            <span>Portal Akademik &amp; Keuangan Kelas</span>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 1: KAMERA LANGSUNG + GPS + WATERMARK CANVAS (ABSENSI / PJ)    -->
+    <!-- =================================================================== -->
+    <div id="modal-camera" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-camera-title">
+      <div class="modal-card glass-panel modal-lg">
+        <div class="modal-header">
+          <div>
+            <h3 id="modal-camera-title">Absensi Kamera Langsung &amp; GPS</h3>
+            <p id="modal-camera-subtitle" class="meta-line">Pastikan wajah terlihat jelas di dalam bingkai kamera.</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-camera" aria-label="Tutup">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="camera-stage">
+            <video id="camera-video" autoplay playsinline muted></video>
+            <canvas id="watermark-canvas" class="hidden"></canvas>
+            <img id="captured-preview" class="hidden" alt="Hasil foto dengan stempel waktu" />
+            <div id="daring-stage-placeholder" class="daring-stage-placeholder hidden">
+              <strong>Unggah Bukti Foto Saat Sedang Daring</strong>
+              <p class="meta-line">
+                Pilih foto atau tangkapan layar perkuliahan daring (Zoom / Meet / Teams) pada kolom di bawah.
+                Lokasi GPS tetap menyala dan stempel waktu WIB akan ditempelkan otomatis.
+              </p>
+            </div>
+          </div>
+
+          <div class="camera-telemetry-strip">
+            <div>
+              <span class="meta-line">Lokasi GPS Saat Ini (Wajib Menyala)</span>
+              <strong id="camera-gps-status" class="tabular-nums">Mengambil koordinat GPS...</strong>
+            </div>
+            <div>
+              <span class="meta-line">Stempel Waktu (WIB)</span>
+              <strong id="camera-time-status" class="tabular-nums">-</strong>
+            </div>
+          </div>
+
+          <div id="camera-orientation-controls" class="camera-orientation-controls">
+            <span class="meta-line">Orientasi Kamera: <strong id="camera-orientation-label" class="text-cyan">Normal (Tanpa Pencerminan)</strong></span>
+            <div class="row-actions">
+              <button type="button" id="btn-switch-camera" class="btn btn-secondary btn-sm">Ganti Kamera (Depan/Belakang)</button>
+              <button type="button" id="btn-flip-camera" class="btn btn-secondary btn-sm">Balik Horizontal (Jika Terbalik)</button>
+            </div>
+          </div>
+
+          <div id="camera-daring-panel" class="payment-channel-box hidden" style="margin-top:12px;">
+            <div class="grid-2" style="margin-bottom:0;">
+              <div class="field-group" style="margin-bottom:8px;">
+                <label for="daring-platform">Platform Absen Daring</label>
+                <select id="daring-platform">
+                  <option value="Zoom Meeting">Zoom Meeting</option>
+                  <option value="Google Meet">Google Meet</option>
+                  <option value="Microsoft Teams">Microsoft Teams</option>
+                  <option value="E-Learning / LMS">E-Learning / LMS</option>
+                  <option value="Lainnya">Lainnya</option>
+                </select>
+              </div>
+              <div class="field-group" style="margin-bottom:8px;">
+                <label for="daring-catatan">Catatan Kehadiran Daring (Opsional)</label>
+                <input type="text" id="daring-catatan" placeholder="Contoh: Hadir menyimak di ruang Zoom" />
+              </div>
+            </div>
+            <div class="field-group" style="margin-bottom:0;margin-top:4px;">
+              <label for="daring-bukti-file">Kirim Bukti Foto Saat Sedang Daring (Wajib)</label>
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="daring-bukti-file" accept="image/*" style="flex:1 1 180px;min-width:0;max-width:100%;" />
+                <button type="button" id="btn-daring-use-camera" class="btn btn-secondary btn-sm">
+                  Atau Ambil Dari Kamera
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="camera-permission-warning" class="alert-box alert-danger hidden">
+            <strong>Izin Kamera atau GPS Ditolak!</strong>
+            <p id="camera-permission-warning-desc">
+              Sistem mendeteksi akses kamera atau lokasi tidak diizinkan. Status absensi akan otomatis tercatat sebagai
+              <strong>Belum Absen!</strong>.
+            </p>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-camera">Batal</button>
+          <button type="button" id="btn-retake-photo" class="btn btn-secondary hidden">Ambil Ulang</button>
+          <button type="button" id="btn-capture-photo" class="btn btn-primary">Ambil Foto Bukti</button>
+          <button type="button" id="btn-submit-attendance" class="btn btn-primary hidden">Kirim Absensi Sekarang</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 2: DETAIL ABSENSI MATA KULIAH                                 -->
+    <!-- =================================================================== -->
+    <div id="modal-detail-absen" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel modal-md">
+        <div class="modal-header">
+          <div>
+            <h3>Detail Catatan Kehadiran</h3>
+            <p id="detail-absen-subtitle" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-detail-absen" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="modal-body" id="detail-absen-body"></div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-detail-absen">Tutup</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 3: PEMBAYARAN KAS (QRIS TIMER 10 MENIT & TRANSFER BANK)       -->
+    <!-- =================================================================== -->
+    <div id="modal-pay-kas" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel modal-md">
+        <div class="modal-header">
+          <div>
+            <h3 id="pay-kas-modal-title">Pembayaran Iuran Kas Kelas</h3>
+            <p id="pay-kas-periode" class="meta-line">Periode Tagihan</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-pay-kas" aria-label="Tutup">&times;</button>
+        </div>
+
+        <form id="form-pay-kas" class="modal-body">
+          <input type="hidden" id="pay-kas-id" />
+
+          <div class="field-group hidden" id="pay-kas-periode-group">
+            <label for="pay-kas-periode-input">Nama Periode / Keterangan Kas</label>
+            <input
+              type="text"
+              id="pay-kas-periode-input"
+              placeholder="Contoh: Minggu 11 - November 2026"
+            />
+          </div>
+
+          <div class="field-group" id="pay-kas-nominal-group">
+            <label for="pay-kas-nominal">Nominal Pembayaran (Minimal Rp 2.000)</label>
+            <input
+              type="number"
+              id="pay-kas-nominal"
+              min="2000"
+              step="500"
+              required
+              class="tabular-nums"
+            />
+          </div>
+
+          <div class="field-group" id="pay-kas-method-group">
+            <label>Pilih Metode Pembayaran</label>
+            <div class="segmented-tabs">
+              <button type="button" class="seg-btn active" data-method="QRIS">QRIS Dinamis (10 Menit)</button>
+              <button type="button" class="seg-btn" data-method="Transfer Bank">Transfer Bank</button>
+            </div>
+          </div>
+
+          <!-- Panel QRIS dengan Timer 10 Menit -->
+          <div id="panel-method-qris" class="payment-channel-box">
+            <div class="qris-header-row">
+              <div>
+                <strong id="qris-merchant-label">Mas_hy, Fashion</strong>
+                <span id="qris-nmid-label" class="meta-line tabular-nums">NMID: ID1025463553806</span>
+                <span id="qris-dynamic-nominal-label" class="meta-line tabular-nums text-cyan" style="display:block;margin-top:2px;">QRIS Dinamis · Nominal Otomatis</span>
+              </div>
+              <div class="qris-timer-box">
+                <span>Batas Waktu QRIS</span>
+                <strong id="qris-countdown-display" class="tabular-nums">10:00</strong>
+              </div>
+            </div>
+            <div class="qris-canvas-wrap">
+              <canvas id="qris-qr-canvas" width="244" height="244"></canvas>
+            </div>
+            <div class="row-actions" style="justify-content:center;margin:8px 0;">
+              <button type="button" id="btn-download-qris-png" class="btn btn-secondary btn-sm">Unduh QRIS (.PNG)</button>
+              <button type="button" id="btn-copy-qris-string" class="btn btn-secondary btn-sm">Salin Kode QRIS</button>
+            </div>
+            <p class="meta-line text-center">
+              Pindai kode QRIS dinamis di atas melalui GoPay, OVO, DANA, ShopeePay, atau perbankan seluler Anda (nominal terisi otomatis).
+            </p>
+          </div>
+
+          <!-- Panel Transfer Bank dengan Tombol Salin Rekening -->
+          <div id="panel-method-bank" class="payment-channel-box hidden">
+            <div class="bank-info-row">
+              <div>
+                <span class="meta-line">Bank Tujuan</span>
+                <strong id="bank-name-display">-</strong>
+              </div>
+              <div>
+                <span class="meta-line">Atas Nama</span>
+                <strong id="bank-holder-display">-</strong>
+              </div>
+            </div>
+            <div class="bank-account-copy">
+              <div>
+                <span class="meta-line">Nomor Rekening</span>
+                <strong id="bank-number-display" class="tabular-nums">-</strong>
+              </div>
+              <button type="button" id="btn-copy-rekening" class="btn btn-secondary btn-sm">
+                Salin Rekening
+              </button>
+            </div>
+          </div>
+
+          <div class="field-group" id="pay-kas-bukti-group">
+            <label for="pay-kas-bukti">Unggah Foto Bukti Pembayaran (Wajib)</label>
+            <input type="file" id="pay-kas-bukti" accept="image/*" required />
+            <img id="pay-kas-preview" class="upload-preview hidden" alt="Pratinjau bukti pembayaran" />
+          </div>
+
+          <div class="modal-footer-inline" id="pay-kas-footer-actions">
+            <button type="button" id="btn-pay-kas-close" class="btn btn-secondary" data-close-modal="modal-pay-kas">Batal</button>
+            <button type="submit" id="btn-pay-kas-submit" class="btn btn-primary">Kirim Bukti Pembayaran</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 4: PREVIEW GAMBAR / NOTA / SURAT                              -->
+    <!-- =================================================================== -->
+    <div id="modal-image-preview" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel modal-md">
+        <div class="modal-header">
+          <div>
+            <h3 id="modal-image-title">Detail Lampiran</h3>
+            <p id="modal-image-meta" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-image-preview" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="modal-body text-center">
+          <img id="modal-image-src" class="lightbox-img" alt="Lampiran dokumen" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-image-preview">Tutup</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 5: EDIT STATUS ABSENSI (KETUA / ADMIN)                        -->
+    <!-- =================================================================== -->
+    <div id="modal-edit-absen" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel modal-sm">
+        <div class="modal-header">
+          <div>
+            <h3>Edit Status Kehadiran</h3>
+            <p id="edit-absen-student" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-edit-absen" aria-label="Tutup">&times;</button>
+        </div>
+        <form id="form-edit-absen" class="modal-body">
+          <input type="hidden" id="edit-absen-id" />
+          <div class="field-group">
+            <label for="edit-absen-status">Status Kehadiran</label>
+            <select id="edit-absen-status" required>
+              <option value="Hadir">Hadir</option>
+              <option value="Izin">Izin</option>
+              <option value="Sakit">Sakit</option>
+              <option value="Alpha">Alpha</option>
+              <option value="Belum Absen!">Belum Absen!</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="edit-absen-verif">Status Verifikasi</label>
+            <select id="edit-absen-verif" required>
+              <option value="Disetujui">Disetujui</option>
+              <option value="Menunggu">Menunggu</option>
+              <option value="Ditolak">Ditolak</option>
+              <option value="Belum Absen!">Belum Absen!</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="edit-absen-pj">Penanggung Jawab (PJ · Terkunci Akun Aktif)</label>
+            <input type="text" id="edit-absen-pj" class="input-locked" readonly disabled />
+          </div>
+          <div class="field-group">
+            <label for="edit-absen-catatan">Catatan Penanggung Jawab</label>
+            <textarea id="edit-absen-catatan" rows="2" placeholder="Opsional"></textarea>
+          </div>
+          <div class="modal-footer-inline">
+            <button type="button" class="btn btn-secondary" data-close-modal="modal-edit-absen">Batal</button>
+            <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 7: PETA POSISI GPS MAHASISWA (KLIK LANGSUNG KETUA & ADMIN)    -->
+    <!-- =================================================================== -->
+    <div id="modal-gps-map" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="gps-map-title">
+      <div class="modal-card glass-panel modal-lg">
+        <div class="modal-header">
+          <div>
+            <h3 id="gps-map-title">Posisi Lokasi GPS Mahasiswa</h3>
+            <p id="gps-map-subtitle" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-gps-map" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="gps-coords-bar">
+            <div>
+              <span class="meta-line">Titik Koordinat (Latitude, Longitude)</span>
+              <strong id="gps-map-coords" class="tabular-nums">-</strong>
+            </div>
+            <button type="button" id="btn-copy-gps-coords" class="btn btn-secondary btn-sm">
+              Salin Koordinat
+            </button>
+          </div>
+
+          <div class="gps-map-frame-wrap">
+            <iframe
+              id="gps-map-iframe"
+              title="Peta Lokasi GPS Absensi Mahasiswa"
+              loading="lazy"
+              referrerpolicy="no-referrer-when-downgrade"
+            ></iframe>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <a
+            id="gps-map-gmaps-link"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-primary"
+          >
+            Buka di Google Maps
+          </a>
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-gps-map">Tutup</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 8: PENGINGAT WHATSAPP & BUKTI TUNGGAKAN KAS RESMI             -->
+    <!-- =================================================================== -->
+    <div id="modal-wa-reminder" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="wa-reminder-title">
+      <div class="modal-card glass-panel modal-lg">
+        <div class="modal-header">
+          <div>
+            <h3 id="wa-reminder-title">Pengingat WhatsApp &amp; Bukti Tunggakan Kas</h3>
+            <p id="wa-reminder-subtitle" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-wa-reminder" aria-label="Tutup">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="payment-channel-box" style="margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div>
+                <strong>Bukti Resmi Rincian Tunggakan (Gambar .PNG)</strong>
+                <span class="meta-line">Lampirkan atau salin gambar bukti ini saat mengirim pesan WhatsApp</span>
+              </div>
+              <div class="row-actions">
+                <button type="button" id="btn-wa-copy-image" class="btn btn-secondary btn-sm">Salin Gambar</button>
+                <a id="btn-wa-download-proof" href="#" download="Bukti_Tunggakan_Kas.png" class="btn btn-secondary btn-sm">Unduh Bukti (.PNG)</a>
+              </div>
+            </div>
+            <div style="text-align:center;">
+              <img
+                id="wa-proof-preview-img"
+                class="lightbox-img"
+                style="max-height:360px;border-radius:10px;border:1px solid var(--border-glass);background:#ffffff;"
+                alt="Bukti rincian tunggakan kas"
+              />
+            </div>
+          </div>
+
+          <div id="wa-rejected-attachments" class="payment-channel-box hidden" style="margin-bottom:14px;">
+            <strong>Lampiran Bukti Terkait (Tagihan Ditolak / Menunggu Verifikasi)</strong>
+            <div id="wa-rejected-attachments-list" class="row-actions" style="margin-top:8px;"></div>
+          </div>
+
+          <div class="field-group" style="margin-bottom:0;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+              <label for="wa-reminder-text" style="margin-bottom:0;">Pesan Rincian Tunggakan WhatsApp</label>
+              <button type="button" id="btn-wa-copy-text" class="btn btn-secondary btn-sm">Salin Pesan</button>
+            </div>
+            <textarea id="wa-reminder-text" rows="7" class="tabular-nums"></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer" style="flex-wrap:wrap;">
+          <button type="button" id="btn-wa-share-native" class="btn btn-coral hidden">Bagikan Gambar + Pesan</button>
+          <a
+            id="btn-wa-open-chat"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-primary"
+          >
+            Buka WhatsApp dengan Pesan Rincian
+          </a>
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-wa-reminder">Tutup</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
