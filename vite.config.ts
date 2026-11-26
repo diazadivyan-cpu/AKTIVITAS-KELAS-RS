@@ -6,6 +6,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/AKTIVITAS-KELAS-RS/',
     plugins: [
       react(),
       tailwindcss(),

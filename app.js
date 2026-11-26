@@ -2825,7 +2825,14 @@ function openPayKasModal(bill = null, opts = { previewOnly: false, customPeriod:
   const previewOnly = Boolean(opts?.previewOnly);
   const customPeriod = Boolean(opts?.customPeriod) && !previewOnly;
   const safeBill = bill || {};
-  const defaultNom = Math.max(2000, Number(safeBill.nominal_tagihan || cfg.nominal_kas_default || 10000));
+  const sudahBayarModal =
+    safeBill.status === 'Menunggu Verifikasi'
+      ? Number(safeBill.nominal_terverifikasi || 0)
+      : Number(safeBill.nominal_dibayar || 0);
+  const sisaTagihanModal = safeBill.nominal_tagihan
+    ? Math.max(0, Number(safeBill.nominal_tagihan) - sudahBayarModal)
+    : Number(cfg.nominal_kas_default || 10000);
+  const defaultNom = Math.max(2000, sisaTagihanModal);
 
   document.getElementById('pay-kas-id').value = customPeriod ? '' : safeBill.id || '';
   document.getElementById('pay-kas-modal-title').textContent = previewOnly
@@ -3096,8 +3103,20 @@ async function handleSubmitPayKas(e) {
     const nowIso = new Date().toISOString();
 
     if (id && bill) {
+      const sudahTerverifikasi =
+        bill.status === 'Menunggu Verifikasi'
+          ? Number(bill.nominal_terverifikasi || 0)
+          : Number(bill.nominal_dibayar || 0);
+      const sisaTagihan = Math.max(0, Number(bill.nominal_tagihan || 0) - sudahTerverifikasi);
+
+      if (nominal > sisaTagihan) {
+        showToast(`Nominal melebihi sisa tunggakan (${formatRupiah(sisaTagihan)}).`, 'danger');
+        return;
+      }
+
       await db.update('iuran_kas', id, {
-        nominal_dibayar: nominal,
+        nominal_terverifikasi: sudahTerverifikasi,
+        nominal_dibayar: nominal, // nominal cicilan yang baru diajukan
         metode_bayar: state.selectedPayMethod,
         bukti_url: buktiUrl,
         status: 'Menunggu Verifikasi',
@@ -5196,32 +5215,41 @@ function renderDaftarPembayaranView() {
 function bindDaftarPembayaranEvents() {
   bindImagePreviewButtons();
 
-  document.querySelectorAll('.btn-acc-kas').forEach((btn) => {
+ document.querySelectorAll('.btn-acc-kas').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-id');
       const bill = state.iuranKas.find((i) => i.id === id);
       if (!bill) return;
       const mhs = state.profiles.find((p) => p.id === bill.user_id);
-      const nom = Number(bill.nominal_dibayar || bill.nominal_tagihan);
+
+      const cicilanBaru = Number(bill.nominal_dibayar || 0);
+      const sudahBayarSebelumnya = Number(bill.nominal_terverifikasi || 0);
+      const totalTerbayar = sudahBayarSebelumnya + cicilanBaru;
+      const tagihan = Number(bill.nominal_tagihan || 0);
+      const sisaTunggakan = Math.max(0, tagihan - totalTerbayar);
+      const isLunas = sisaTunggakan <= 0;
+
       const senderName = mhs?.nama_lengkap || 'Mahasiswa';
       const verifierName = state.currentUser.nama_lengkap;
       const verifierId = state.currentUser.id;
 
       try {
         await db.update('iuran_kas', id, {
-          status: 'Lunas',
-          nominal_dibayar: nom,
+          status: isLunas ? 'Lunas' : 'Belum Lunas',
+          nominal_dibayar: Math.min(tagihan, totalTerbayar),
+          nominal_terverifikasi: Math.min(tagihan, totalTerbayar),
           verified_by: verifierId,
           pj_id: verifierId,
           pj_nama: verifierName,
         });
+
         await db.insert('transaksi_kas', {
           jenis: 'Pemasukan',
           kategori: 'Iuran Kas',
           tanggal: getWibDateKey(new Date()),
-          keterangan: `Iuran Kas ${bill.periode} · Pengirim: ${senderName} (${bill.metode_bayar || 'Transfer'})`,
+          keterangan: `Iuran Kas ${bill.periode} (${isLunas ? 'Lunas' : `Cicilan · Sisa ${formatRupiah(sisaTunggakan)}`}) · Pengirim: ${senderName} (${bill.metode_bayar || 'Transfer'})`,
           pengirim_nama: senderName,
-          nominal: nom,
+          nominal: cicilanBaru,
           nota_url: bill.bukti_url || '',
           terkait_user_id: bill.user_id,
           pj_id: null,
@@ -5229,11 +5257,15 @@ function bindDaftarPembayaranEvents() {
           dicatat_oleh: state.currentUser.id,
         });
 
+        const statusInfo = isLunas
+          ? 'dan berstatus Lunas.'
+          : `(Cicilan diterima. Sisa tunggakan: ${formatRupiah(sisaTunggakan)}).`;
+
         const notifItems = [
           {
             user_id: bill.user_id,
-            judul: 'Pembayaran Kas Disetujui (Lunas)',
-            pesan: `Pembayaran kas ${bill.periode} sebesar ${formatRupiah(nom)} telah disetujui oleh ${verifierName} dan berstatus Lunas.`,
+            judul: isLunas ? 'Pembayaran Kas Disetujui (Lunas)' : 'Cicilan Pembayaran Kas Disetujui',
+            pesan: `Pembayaran kas ${bill.periode} sebesar ${formatRupiah(cicilanBaru)} telah disetujui oleh ${verifierName} ${statusInfo}`,
             tipe: 'success',
           },
         ];
@@ -5241,7 +5273,7 @@ function bindDaftarPembayaranEvents() {
           notifItems.push({
             user_id: adminId,
             judul: 'Pembayaran Kas Mahasiswa Disetujui',
-            pesan: `Pembayaran kas ${senderName} (${mhs?.npm || '-'}) untuk ${bill.periode} (${formatRupiah(nom)}) telah disetujui oleh ${verifierName}.`,
+            pesan: `Pembayaran kas ${senderName} (${mhs?.npm || '-'}) untuk ${bill.periode} sebesar ${formatRupiah(cicilanBaru)} disetujui oleh ${verifierName} ${statusInfo}`,
             tipe: 'success',
           });
         });
@@ -5249,14 +5281,19 @@ function bindDaftarPembayaranEvents() {
           notifItems.push({
             user_id: bendaharaId,
             judul: 'Verifikasi Pembayaran Kas Berhasil',
-            pesan: `Iuran kas ${senderName} (${bill.periode}) sebesar ${formatRupiah(nom)} resmi berstatus Lunas (PJ: ${verifierName}).`,
+            pesan: `Iuran kas ${senderName} (${bill.periode}) sebesar ${formatRupiah(cicilanBaru)} diverifikasi oleh ${verifierName} ${statusInfo}`,
             tipe: 'success',
           });
         });
         await emitNotifications(notifItems);
 
         await db.loadAll();
-        showToast('Pembayaran kas diterima & saldo pemasukan bertambah!', 'success');
+        showToast(
+          isLunas
+            ? 'Pembayaran kas lunas & saldo pemasukan bertambah!'
+            : `Cicilan ${formatRupiah(cicilanBaru)} diterima! Sisa tunggakan: ${formatRupiah(sisaTunggakan)}.`,
+          'success'
+        );
         renderSidebarNav();
         renderActiveTab();
       } catch (err) {
@@ -5274,11 +5311,14 @@ function bindDaftarPembayaranEvents() {
       const senderName = mhs?.nama_lengkap || 'Mahasiswa';
       const verifierName = state.currentUser.nama_lengkap;
       const verifierId = state.currentUser.id;
+      // Kembalikan nominal_dibayar ke saldo cicilan yang sudah terverifikasi sebelumnya
+      const saldoSebelumnya = Number(bill.nominal_terverifikasi || 0);
+
       try {
         try {
           await db.update('iuran_kas', id, {
             status: 'Ditolak',
-            nominal_dibayar: 0,
+            nominal_dibayar: saldoSebelumnya,
             pj_id: verifierId,
             pj_nama: verifierName,
           });
@@ -5287,7 +5327,7 @@ function bindDaftarPembayaranEvents() {
           if (msg.includes('check') || msg.includes('iuran_kas_status_check')) {
             await db.update('iuran_kas', id, {
               status: 'Belum Lunas',
-              nominal_dibayar: 0,
+              nominal_dibayar: saldoSebelumnya,
               metode_bayar: 'Ditolak',
               pj_id: verifierId,
               pj_nama: verifierName,
@@ -5296,6 +5336,7 @@ function bindDaftarPembayaranEvents() {
             throw constraintErr;
           }
         }
+        // ... lanjutkan kode emitNotifications & reload Anda di bawah ini seperti semula
 
         const notifItems = [
           {
@@ -6617,6 +6658,10 @@ function renderMonitoringExcelView() {
       showAttendanceMatrix
         ? `
           <!-- Tabel Matriks Absensi Keseluruhan Mahasiswa (Pertemuan 1 - 14 & Mata Kuliah) -->
+          ${
+            state.currentUser?.role === 'bendahara'
+              ? ''
+              : `
           <div class="card glass-panel" style="margin-bottom:20px;">
             <div class="card-header">
               <div>
@@ -6673,6 +6718,8 @@ function renderMonitoringExcelView() {
               </table>
             </div>
           </div>
+          `
+          }
         `
         : ''
     }
