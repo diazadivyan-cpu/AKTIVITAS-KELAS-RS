@@ -27,7 +27,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- QRCode Generator CDN untuk QRIS Dinamis EMVCo Scannable -->
     <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-
+
     <script>
       (function () {
         try {
@@ -39,8 +39,8 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="/AKTIVITAS-KELAS-RS/assets/index-6UCaHrzo.js"></script>
-    <link rel="stylesheet" crossorigin href="/AKTIVITAS-KELAS-RS/assets/index-Duc4JQ7X.css">
+    <script type="module" crossorigin src="/assets/index-B68Ou9qT.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CedclUh2.css">
   </head>
   <body>
     <!-- COVER ANIMASI LANGIT & GALAKSI REAL-TIME WIB (GLOBAL: LOGIN & INDEX) -->
@@ -670,6 +670,7 @@
 
         <form id="form-pay-kas" class="modal-body">
           <input type="hidden" id="pay-kas-id" />
+          <div id="pay-kas-info-box" class="mb-2"></div>
 
           <div class="field-group hidden" id="pay-kas-periode-group">
             <label for="pay-kas-periode-input">Nama Periode / Keterangan Kas</label>
@@ -686,7 +687,7 @@
               type="number"
               id="pay-kas-nominal"
               min="2000"
-              step="500"
+              step="any"
               required
               class="tabular-nums"
             />
@@ -833,6 +834,28 @@
     </div>
 
     <!-- =================================================================== -->
+    <!-- MODAL 6: KONFIRMASI HAPUS MATA KULIAH / SESI ABSENSI                -->
+    <!-- =================================================================== -->
+    <div id="modal-confirm-delete" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+      <div class="modal-card glass-panel modal-sm">
+        <div class="modal-header">
+          <div>
+            <h3 id="confirm-delete-title">Konfirmasi Penghapusan</h3>
+            <p id="confirm-delete-subtitle" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-confirm-delete" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="confirm-delete-message" style="margin:0;line-height:1.55;">Apakah Anda yakin ingin menghapus data ini?</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-confirm-delete">Batal</button>
+          <button type="button" id="btn-confirm-delete-exec" class="btn btn-danger-soft">Ya, Hapus</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
     <!-- MODAL 7: PETA POSISI GPS MAHASISWA (KLIK LANGSUNG KETUA & ADMIN)    -->
     <!-- =================================================================== -->
     <div id="modal-gps-map" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="gps-map-title">
@@ -943,6 +966,6 @@
         </div>
       </div>
     </div>
-
+
   </body>
 </html>
