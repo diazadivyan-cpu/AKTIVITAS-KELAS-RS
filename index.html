@@ -672,8 +672,6 @@
           <div id="pay-kas-info-box" class="mb-2"></div>
 
           <div class="field-group hidden" id="pay-kas-periode-group">
-
-          <div class="field-group hidden" id="pay-kas-periode-group">
             <label for="pay-kas-periode-input">Nama Periode / Keterangan Kas</label>
             <input
               type="text"
@@ -688,7 +686,7 @@
               type="number"
               id="pay-kas-nominal"
               min="2000"
-              step="500"
+              step="any"
               required
               class="tabular-nums"
             />
@@ -831,6 +829,28 @@
             <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- MODAL 6: KONFIRMASI HAPUS MATA KULIAH / SESI ABSENSI                -->
+    <!-- =================================================================== -->
+    <div id="modal-confirm-delete" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+      <div class="modal-card glass-panel modal-sm">
+        <div class="modal-header">
+          <div>
+            <h3 id="confirm-delete-title">Konfirmasi Penghapusan</h3>
+            <p id="confirm-delete-subtitle" class="meta-line">-</p>
+          </div>
+          <button type="button" class="btn-modal-close" data-close-modal="modal-confirm-delete" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="confirm-delete-message" style="margin:0;line-height:1.55;">Apakah Anda yakin ingin menghapus data ini?</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="modal-confirm-delete">Batal</button>
+          <button type="button" id="btn-confirm-delete-exec" class="btn btn-danger-soft">Ya, Hapus</button>
+        </div>
       </div>
     </div>
 

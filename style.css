@@ -751,8 +751,10 @@ input[type='file'] {
   gap: 8px;
 }
 
-.input-with-btn input {
+.input-with-btn input,
+.input-with-btn select {
   flex: 1;
+  min-width: 0;
 }
 
 .inline-select-pair {

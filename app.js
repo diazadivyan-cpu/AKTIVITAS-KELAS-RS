@@ -20,6 +20,7 @@ const STORAGE_KEYS = {
   SESSION_USER: 'r3s_session_user_id_v1',
   LOCAL_DB: 'r3s_local_db_v1',
   THEME: 'r3s_theme_v1',
+  HIDDEN_MATKUL: 'r3s_hidden_matkul_v1',
 };
   
 const ROLE_LABELS = {
@@ -34,8 +35,12 @@ function isStudentRole(role) {
   return role === 'mahasiswa' || role === 'pj_matkul';
 }
 
-function isKasMemberRole(role) {
+function isClassMemberRole(role) {
   return role === 'mahasiswa' || role === 'pj_matkul' || role === 'ketua' || role === 'bendahara';
+}
+
+function isKasMemberRole(role) {
+  return isClassMemberRole(role);
 }
 
 function getRoleTagClass(role) {
@@ -73,6 +78,20 @@ const state = {
   filters: {
     riwayatSearch: '',
     riwayatStatus: 'Semua',
+    manualAbsenSearch: '',
+    manualAbsenMode: 'manual',
+    manualSelectedIds: [],
+    matkulSearch: '',
+    matkulStatus: 'Semua',
+    sesiMatkulSearch: '',
+    katalogMatkulSearch: '',
+    verifikasiAbsenSearch: '',
+    pembayaranSearch: '',
+    pembayaranStatus: 'Semua',
+    matrixAbsenSearch: '',
+    matrixMatkulSearch: '',
+    matrixKasSearch: '',
+    matrixKasStatus: 'Semua',
     kasSearch: '',
     kasJenis: 'Semua',
     kasKategori: 'Semua',
@@ -114,6 +133,28 @@ const state = {
   currentDynamicQrisString: DEFAULT_QRIS_PAYLOAD,
   waReminderContext: null,
 };
+
+function bindLiveSearchInput(inputId, onUpdate) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  el.addEventListener('input', (e) => {
+    const start = e.target.selectionStart;
+    const end = e.target.selectionEnd;
+    onUpdate(e.target.value);
+    renderActiveTab();
+    const freshEl = document.getElementById(inputId);
+    if (freshEl) {
+      freshEl.focus();
+      const posStart = typeof start === 'number' ? start : freshEl.value.length;
+      const posEnd = typeof end === 'number' ? end : freshEl.value.length;
+      try {
+        freshEl.setSelectionRange(posStart, posEnd);
+      } catch {
+        // ignore if selection range unsupported
+      }
+    }
+  });
+}
 
 // ----------------------------------------------------------------------------
 // 3. UTILITAS WAKTU WIB (Asia/Jakarta), FORMATTER & VALIDATOR
@@ -274,9 +315,79 @@ function getStatusTagClass(status) {
   const s = String(status || '').toLowerCase();
   if (['hadir', 'disetujui', 'lunas', 'selesai', 'pemasukan'].includes(s)) return 'tag-success';
   if (['menunggu', 'menunggu verifikasi', 'izin'].includes(s)) return 'tag-coral';
-  if (['sakit'].includes(s)) return 'tag-warning';
+  if (['sakit', 'sebagian'].includes(s)) return 'tag-warning';
   if (['ditolak', 'alpha', 'belum absen!', 'belum lunas', 'pengeluaran'].includes(s)) return 'tag-danger';
   return 'tag-info';
+}
+
+const PENDING_PJ_PREFIX = '__PENDING__:';
+
+function getBillPendingAmount(bill) {
+  if (!bill || bill.status !== 'Menunggu Verifikasi') return 0;
+  if (bill.nominal_pending !== undefined && bill.nominal_pending !== null && Number(bill.nominal_pending) > 0) {
+    return Number(bill.nominal_pending);
+  }
+  const pjRaw = String(bill.pj_nama || '');
+  if (pjRaw.startsWith(PENDING_PJ_PREFIX)) {
+    const parsed = Number(pjRaw.slice(PENDING_PJ_PREFIX.length));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const legacyPending = Number(bill.nominal_dibayar || 0);
+  if (legacyPending > 0) return legacyPending;
+  return Number(bill.nominal_tagihan || 0);
+}
+
+function getBillVerifiedPaid(bill) {
+  if (!bill) return 0;
+  const tagihan = Number(bill.nominal_tagihan || 0);
+  const dbDibayar = Number(bill.nominal_dibayar || 0);
+  const dbTerverifikasi = Number(bill.nominal_terverifikasi || 0);
+  const clamp = (val) =>
+    tagihan > 0 ? Math.min(tagihan, Math.max(0, val)) : Math.max(0, val);
+
+  if (bill.status === 'Menunggu Verifikasi') {
+    const hasExplicitPending =
+      (bill.nominal_pending !== undefined &&
+        bill.nominal_pending !== null &&
+        Number(bill.nominal_pending) > 0) ||
+      String(bill.pj_nama || '').startsWith(PENDING_PJ_PREFIX);
+    if (hasExplicitPending) {
+      return clamp(Math.max(dbTerverifikasi, dbDibayar));
+    }
+    return clamp(dbTerverifikasi);
+  }
+
+  if (bill.status === 'Lunas') {
+    if (dbDibayar === 0 && dbTerverifikasi === 0) {
+      return Math.max(0, tagihan);
+    }
+    return clamp(Math.max(dbTerverifikasi, dbDibayar));
+  }
+
+  return clamp(Math.max(dbTerverifikasi, dbDibayar));
+}
+
+function getBillSisaTunggakan(bill) {
+  if (!bill) return 0;
+  const tagihan = Number(bill.nominal_tagihan || 0);
+  const verified = getBillVerifiedPaid(bill);
+  if (tagihan > 0) return Math.max(0, tagihan - verified);
+  return 0;
+}
+
+function getBillDisplayStatus(bill) {
+  if (!bill) return 'Belum Lunas';
+  const tagihan = Number(bill.nominal_tagihan || 0);
+  const verified = getBillVerifiedPaid(bill);
+  const sisa = Math.max(0, tagihan - verified);
+  if (bill.status === 'Menunggu Verifikasi') return 'Menunggu Verifikasi';
+  if (tagihan > 0 && sisa <= 0) return 'Lunas';
+  if (tagihan <= 0 && bill.status === 'Lunas') return 'Lunas';
+  if (bill.status === 'Ditolak' || (bill.status === 'Belum Lunas' && bill.metode_bayar === 'Ditolak')) {
+    return 'Ditolak';
+  }
+  if (verified > 0 && sisa > 0) return 'Sebagian';
+  return 'Belum Lunas';
 }
 
 function getUserIdsByRoles(roles) {
@@ -615,12 +726,14 @@ const db = {
   async insert(table, payload) {
     if (state.mode === 'supabase' && state.supabase) {
       let cleanPayload = Array.isArray(payload) ? payload.map((r) => ({ ...r })) : { ...payload };
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         const { data, error } = await state.supabase.from(table).insert(cleanPayload).select();
         if (!error) return data;
-        const m = error.message?.match(/Could not find the '([^']+)' column/);
-        if (m) {
-          const missingCol = m[1];
+        const m = error.message?.match(
+          /Could not find the '([^']+)' column|column "([^"]+)" of relation/i
+        );
+        const missingCol = m && (m[1] || m[2]);
+        if (missingCol) {
           if (Array.isArray(cleanPayload)) cleanPayload.forEach((r) => delete r[missingCol]);
           else delete cleanPayload[missingCol];
           continue;
@@ -679,16 +792,19 @@ const db = {
   async update(table, id, patch) {
     if (state.mode === 'supabase' && state.supabase) {
       let cleanPatch = { ...patch };
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         const { data, error } = await state.supabase
           .from(table)
           .update(cleanPatch)
           .eq('id', id)
           .select();
         if (!error) return data;
-        const m = error.message?.match(/Could not find the '([^']+)' column/);
-        if (m) {
-          delete cleanPatch[m[1]];
+        const m = error.message?.match(
+          /Could not find the '([^']+)' column|column "([^"]+)" of relation/i
+        );
+        const missingCol = m && (m[1] || m[2]);
+        if (missingCol) {
+          delete cleanPatch[missingCol];
           continue;
         }
         throw error;
@@ -719,6 +835,9 @@ const db = {
     }
     const local = getLocalDb();
     local[table] = (local[table] || []).filter((item) => item.id !== id);
+    if (table === 'sesi_absensi') {
+      local.absensi = (local.absensi || []).filter((item) => item.sesi_id !== id);
+    }
     saveLocalDb(local);
   },
 
@@ -1486,11 +1605,14 @@ function buildTodayActivities24h() {
       if (verifierRole === 'admin' && i.user_id !== u.id) return;
     }
 
+    const dispStatus = getBillDisplayStatus(i);
+    const displayNominal =
+      i.status === 'Menunggu Verifikasi' ? getBillPendingAmount(i) : getBillVerifiedPaid(i);
     items.push({
       ts,
       title: `Pembayaran Kas ${i.periode} · ${mhs}`,
-      meta: `${formatRupiah(i.nominal_dibayar)} · ${i.status}`,
-      tagClass: getStatusTagClass(i.status),
+      meta: `${formatRupiah(displayNominal)} · ${dispStatus}`,
+      tagClass: getStatusTagClass(dispStatus),
     });
   });
 
@@ -1526,15 +1648,12 @@ function renderDashboardView() {
   const circ = 2 * Math.PI * radius;
   const dashOffset = circ - (pctSemester / 100) * circ;
 
-  // Hitung tunggakan kas pengguna (atau seluruh kelas untuk Bendahara/Admin)
-  const myBills = state.iuranKas.filter((i) => i.user_id === u.id && i.status !== 'Lunas');
-  const myTunggakanRp = myBills.reduce((sum, i) => sum + Math.max(0, i.nominal_tagihan - i.nominal_dibayar), 0);
+  // Hitung tunggakan kas pengguna (atau seluruh kelas untuk Bendahara/Admin) berbasis akumulasi nominal terverifikasi
+  const myBills = state.iuranKas.filter((i) => i.user_id === u.id && getBillSisaTunggakan(i) > 0);
+  const myTunggakanRp = myBills.reduce((sum, i) => sum + getBillSisaTunggakan(i), 0);
 
-  const allUnpaid = state.iuranKas.filter((i) => i.status !== 'Lunas');
-  const totalPiutangKelas = allUnpaid.reduce(
-    (sum, i) => sum + Math.max(0, i.nominal_tagihan - i.nominal_dibayar),
-    0
-  );
+  const allUnpaid = state.iuranKas.filter((i) => getBillSisaTunggakan(i) > 0);
+  const totalPiutangKelas = allUnpaid.reduce((sum, i) => sum + getBillSisaTunggakan(i), 0);
 
   // Hitung kas umum kelas
   const totalMasuk = state.transaksiKas
@@ -1662,7 +1781,7 @@ function renderDashboardView() {
               : 'Belum ada mata kuliah yang sedang berlangsung'
           }
         </div>
-        <div class="kpi-sub" style="margin-top:4px;">Total anggota terdaftar: ${state.profiles.filter((p) => isStudentRole(p.role)).length} mahasiswa</div>
+        <div class="kpi-sub" style="margin-top:4px;">Total anggota terdaftar: ${state.profiles.filter((p) => isClassMemberRole(p.role)).length} mahasiswa</div>
       </div>
     </div>
 
@@ -2480,6 +2599,27 @@ function renderMahasiswaAbsensiView() {
   const sesiMap = Object.fromEntries(state.sesiAbsensi.map((s) => [s.id, s]));
   const myHistory = state.absensi.filter((a) => a.user_id === u.id);
 
+  const qMatkul = (state.filters.matkulSearch || '').trim().toLowerCase();
+  const statusMatkul = state.filters.matkulStatus || 'Semua';
+
+  const filteredSesi = sesiSorted.filter((sesi) => {
+    const isOpen = sesi.is_active && new Date(sesi.batas_waktu).getTime() > nowMs;
+    if (statusMatkul === 'Dibuka' && !isOpen) return false;
+    if (statusMatkul === 'Ditutup' && isOpen) return false;
+    if (!qMatkul) return true;
+    const pjMatkul = resolveSessionPjMatkulName(sesi);
+    const searchable = `${sesi.mata_kuliah || ''} ${sesi.dosen || ''} ${pjMatkul} ${sesi.mode_kuliah || ''} pertemuan ${sesi.pertemuan_ke || ''}`.toLowerCase();
+    return searchable.includes(qMatkul);
+  });
+
+  const filteredHistory = myHistory.filter((a) => {
+    if (!qMatkul) return true;
+    const s = sesiMap[a.sesi_id];
+    const pjNama = a.pj_nama || s?.pj_nama || '';
+    const searchable = `${s?.mata_kuliah || ''} ${s?.dosen || ''} ${pjNama} ${a.status_kehadiran || ''} ${a.status_verifikasi || ''} pertemuan ${s?.pertemuan_ke || ''}`.toLowerCase();
+    return searchable.includes(qMatkul);
+  });
+
   return `
     <div class="page-header">
       <div>
@@ -2488,11 +2628,30 @@ function renderMahasiswaAbsensiView() {
       </div>
     </div>
 
+    <div class="card glass-panel" style="margin-bottom:18px;padding:14px 16px;">
+      <div class="toolbar-filters" style="margin-bottom:0;">
+        <input
+          type="search"
+          id="filter-mahasiswa-matkul-search"
+          placeholder="Cari mata kuliah, dosen pengampu, PJ matkul, mode, atau pertemuan..."
+          value="${escapeHtml(state.filters.matkulSearch || '')}"
+        />
+        <select id="filter-mahasiswa-matkul-status" aria-label="Filter status sesi">
+          <option value="Semua" ${statusMatkul === 'Semua' ? 'selected' : ''}>Semua Status Sesi</option>
+          <option value="Dibuka" ${statusMatkul === 'Dibuka' ? 'selected' : ''}>Sesi Dibuka</option>
+          <option value="Ditutup" ${statusMatkul === 'Ditutup' ? 'selected' : ''}>Sesi Ditutup</option>
+        </select>
+        <span class="status-tag tag-info tabular-nums">${filteredSesi.length}/${sesiSorted.length} Sesi</span>
+      </div>
+    </div>
+
     <div class="sessions-grid" style="margin-bottom:20px;">
       ${
         sesiSorted.length === 0
           ? '<div class="card glass-panel"><p class="meta-line">Belum ada sesi absensi dibuka oleh Ketua Kelas atau Admin.</p></div>'
-          : sesiSorted
+          : filteredSesi.length === 0
+          ? `<div class="card glass-panel"><p class="meta-line">Tidak ada mata kuliah yang cocok dengan pencarian "${escapeHtml(state.filters.matkulSearch || statusMatkul)}".</p></div>`
+          : filteredSesi
               .map((sesi) => {
                 const isOpen = sesi.is_active && new Date(sesi.batas_waktu).getTime() > nowMs;
                 const myRecord = state.absensi.find(
@@ -2603,9 +2762,9 @@ function renderMahasiswaAbsensiView() {
           </thead>
           <tbody>
             ${
-              myHistory.length === 0
-                ? '<tr><td colspan="7" class="text-center">Belum ada catatan kehadiran tersimpan.</td></tr>'
-                : myHistory
+              filteredHistory.length === 0
+                ? `<tr><td colspan="7" class="text-center">${myHistory.length === 0 ? 'Belum ada catatan kehadiran tersimpan.' : 'Tidak ada riwayat mata kuliah yang cocok dengan pencarian.'}</td></tr>`
+                : filteredHistory
                     .map((a) => {
                       const s = sesiMap[a.sesi_id];
                       const pjNama = a.pj_nama || s?.pj_nama || '-';
@@ -2671,6 +2830,15 @@ function bindMahasiswaAbsensiEvents() {
     });
   });
 
+  bindLiveSearchInput('filter-mahasiswa-matkul-search', (val) => {
+    state.filters.matkulSearch = val;
+  });
+
+  document.getElementById('filter-mahasiswa-matkul-status')?.addEventListener('change', (e) => {
+    state.filters.matkulStatus = e.target.value;
+    renderActiveTab();
+  });
+
   document.querySelectorAll('.btn-detail-absen').forEach((btn) => {
     btn.addEventListener('click', () => {
       openDetailAbsenModal(
@@ -2686,12 +2854,9 @@ function renderMahasiswaKasView() {
   const u = state.currentUser;
   const profileMap = Object.fromEntries(state.profiles.map((p) => [p.id, p]));
   const myBills = state.iuranKas.filter((i) => i.user_id === u.id);
-  const unpaid = myBills.filter((i) => i.status !== 'Lunas');
-  const paid = myBills.filter((i) => i.status === 'Lunas');
-  const totalTunggakan = unpaid.reduce(
-    (sum, i) => sum + Math.max(0, i.nominal_tagihan - i.nominal_dibayar),
-    0
-  );
+  const unpaid = myBills.filter((i) => getBillDisplayStatus(i) !== 'Lunas');
+  const paid = myBills.filter((i) => getBillDisplayStatus(i) === 'Lunas');
+  const totalTunggakan = unpaid.reduce((sum, i) => sum + getBillSisaTunggakan(i), 0);
 
   return `
     <div class="page-header">
@@ -2709,7 +2874,7 @@ function renderMahasiswaKasView() {
       <div class="card-header">
         <div>
           <h3>Daftar Tagihan &amp; Tunggakan Kas</h3>
-          <span class="meta-line">Minimal pembayaran Rp 2.000 melalui QRIS (batas waktu 10 menit) atau Transfer Bank</span>
+          <span class="meta-line">Minimal pembayaran Rp 2.000 (atau sisa tagihan) melalui QRIS atau Transfer Bank · Mendukung pembayaran cicilan/sebagian</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -2718,6 +2883,8 @@ function renderMahasiswaKasView() {
             <tr>
               <th>Periode</th>
               <th>Nominal Tagihan</th>
+              <th>Sudah Dibayar</th>
+              <th>Sisa Tunggakan</th>
               <th>Metode</th>
               <th>Status</th>
               <th>Aksi</th>
@@ -2726,25 +2893,40 @@ function renderMahasiswaKasView() {
           <tbody>
             ${
               unpaid.length === 0
-                ? '<tr><td colspan="5" class="text-center">Tidak ada tunggakan kas saat ini.</td></tr>'
+                ? '<tr><td colspan="7" class="text-center">Tidak ada tunggakan kas saat ini.</td></tr>'
                 : unpaid
                     .map((b) => {
-                      const isRejected =
-                        b.status === 'Ditolak' ||
-                        (b.status === 'Belum Lunas' && b.metode_bayar === 'Ditolak');
-                      const statusLabel = isRejected ? 'Ditolak' : b.status;
-                      const canPay = b.status === 'Belum Lunas' || isRejected;
+                      const statusLabel = getBillDisplayStatus(b);
+                      const sudahBayar = getBillVerifiedPaid(b);
+                      const sisa = getBillSisaTunggakan(b);
+                      const pendingAmt = getBillPendingAmount(b);
+                      const isRejected = statusLabel === 'Ditolak';
+                      const canPay = statusLabel === 'Belum Lunas' || statusLabel === 'Sebagian' || isRejected;
+                      const payBtnLabel = isRejected
+                        ? 'Bayar Ulang'
+                        : sudahBayar > 0
+                        ? `Bayar Sisa (${formatRupiah(sisa)})`
+                        : 'Bayar Kas';
                       return `
                   <tr>
                     <td><strong>${escapeHtml(b.periode)}</strong></td>
                     <td class="tabular-nums">${formatRupiah(b.nominal_tagihan)}</td>
+                    <td class="tabular-nums text-success">${formatRupiah(sudahBayar)}</td>
+                    <td class="tabular-nums text-danger"><strong>${formatRupiah(sisa)}</strong></td>
                     <td>${escapeHtml(b.metode_bayar && b.metode_bayar !== 'Ditolak' ? b.metode_bayar : '-')}</td>
-                    <td><span class="status-tag ${getStatusTagClass(statusLabel)}">${escapeHtml(statusLabel)}</span></td>
+                    <td>
+                      <span class="status-tag ${getStatusTagClass(statusLabel)}">${escapeHtml(statusLabel)}</span>
+                      ${
+                        statusLabel === 'Menunggu Verifikasi' && pendingAmt > 0
+                          ? `<div class="meta-line tabular-nums">Diajukan: ${formatRupiah(pendingAmt)}</div>`
+                          : ''
+                      }
+                    </td>
                     <td>
                       <div class="row-actions">
                         ${
                           canPay
-                            ? `<button type="button" class="btn btn-primary btn-sm btn-pay-iuran" data-id="${b.id}">${isRejected ? 'Bayar Ulang' : 'Bayar Kas'}</button>`
+                            ? `<button type="button" class="btn btn-primary btn-sm btn-pay-iuran" data-id="${b.id}">${payBtnLabel}</button>`
                             : `<span class="meta-line">Menunggu Verifikasi Bendahara</span>`
                         }
                         ${
@@ -2793,7 +2975,7 @@ function renderMahasiswaKasView() {
                       return `
                         <tr>
                           <td>${escapeHtml(b.periode)}</td>
-                          <td class="tabular-nums text-success">${formatRupiah(b.nominal_dibayar)}</td>
+                          <td class="tabular-nums text-success">${formatRupiah(getBillVerifiedPaid(b))}</td>
                           <td>${escapeHtml(b.metode_bayar || '-')}</td>
                           <td class="tabular-nums">${escapeHtml(formatWibShort(b.tanggal_bayar))}</td>
                           <td><strong>${escapeHtml(pjNama)}</strong></td>
@@ -2825,14 +3007,15 @@ function openPayKasModal(bill = null, opts = { previewOnly: false, customPeriod:
   const previewOnly = Boolean(opts?.previewOnly);
   const customPeriod = Boolean(opts?.customPeriod) && !previewOnly;
   const safeBill = bill || {};
-  const sudahBayarModal =
-    safeBill.status === 'Menunggu Verifikasi'
-      ? Number(safeBill.nominal_terverifikasi || 0)
-      : Number(safeBill.nominal_dibayar || 0);
+  const sudahBayarModal = safeBill.id ? getBillVerifiedPaid(safeBill) : 0;
   const sisaTagihanModal = safeBill.nominal_tagihan
     ? Math.max(0, Number(safeBill.nominal_tagihan) - sudahBayarModal)
     : Number(cfg.nominal_kas_default || 10000);
-  const defaultNom = Math.max(2000, sisaTagihanModal);
+  const minAllowedPay =
+    !customPeriod && safeBill.id && sisaTagihanModal > 0 && sisaTagihanModal < 2000
+      ? sisaTagihanModal
+      : 2000;
+  const defaultNom = Math.max(minAllowedPay, sisaTagihanModal);
 
   document.getElementById('pay-kas-id').value = customPeriod ? '' : safeBill.id || '';
   document.getElementById('pay-kas-modal-title').textContent = previewOnly
@@ -2844,7 +3027,7 @@ function openPayKasModal(bill = null, opts = { previewOnly: false, customPeriod:
     ? `${safeBill.periode || 'QRIS Pembayaran Resmi Kelas R3S'} · Nominal ${formatRupiah(defaultNom)}`
     : customPeriod
     ? `${state.currentUser?.nama_lengkap || 'Anggota'} · Pembayaran kas mandiri via QRIS atau Transfer Bank`
-    : `${safeBill.periode || 'Tagihan Kas'} · Tagihan ${formatRupiah(defaultNom)}`;
+    : `${safeBill.periode || 'Tagihan Kas'} · Tagihan ${formatRupiah(safeBill.nominal_tagihan || defaultNom)} · Terbayar ${formatRupiah(sudahBayarModal)} · Sisa ${formatRupiah(sisaTagihanModal)}`;
 
   const periodeGroup = document.getElementById('pay-kas-periode-group');
   const periodeInput = document.getElementById('pay-kas-periode-input');
@@ -2860,7 +3043,21 @@ function openPayKasModal(bill = null, opts = { previewOnly: false, customPeriod:
   }
 
   const nomInput = document.getElementById('pay-kas-nominal');
+  const nomLabel = document.querySelector('#pay-kas-nominal-group label');
   const buktiInput = document.getElementById('pay-kas-bukti');
+  nomInput.min = String(minAllowedPay);
+  nomInput.step = 'any';
+  if (!customPeriod && safeBill.id && sisaTagihanModal > 0) {
+    nomInput.max = String(sisaTagihanModal);
+  } else {
+    nomInput.removeAttribute('max');
+  }
+  if (nomLabel) {
+    nomLabel.textContent =
+      !customPeriod && safeBill.id
+        ? `Nominal Pembayaran (Min ${formatRupiah(minAllowedPay)} · Maks Sisa ${formatRupiah(sisaTagihanModal)})`
+        : 'Nominal Pembayaran (Minimal Rp 2.000)';
+  }
   nomInput.value = defaultNom;
   nomInput.required = !previewOnly;
   buktiInput.required = !previewOnly;
@@ -3084,12 +3281,21 @@ async function handleSubmitPayKas(e) {
   const nominal = Number(document.getElementById('pay-kas-nominal').value);
   const file = document.getElementById('pay-kas-bukti').files[0];
 
+  const bill = id ? state.iuranKas.find((i) => i.id === id) : null;
+  const sudahTerverifikasi = bill ? getBillVerifiedPaid(bill) : 0;
+  const sisaTagihan = bill ? Math.max(0, Number(bill.nominal_tagihan || 0) - sudahTerverifikasi) : 0;
+  const minAllowedPay = bill && sisaTagihan > 0 && sisaTagihan < 2000 ? sisaTagihan : 2000;
+
   if (isCustomMode && !customPeriode) {
     showToast('Isi nama periode atau keterangan pembayaran kas terlebih dahulu.', 'danger');
     return;
   }
-  if (!Number.isFinite(nominal) || nominal < 2000) {
-    showToast('Minimal pembayaran kas adalah Rp 2.000.', 'danger');
+  if (!Number.isFinite(nominal) || nominal < minAllowedPay) {
+    showToast(`Minimal pembayaran kas adalah ${formatRupiah(minAllowedPay)}.`, 'danger');
+    return;
+  }
+  if (bill && nominal > sisaTagihan) {
+    showToast(`Nominal melebihi sisa tunggakan (${formatRupiah(sisaTagihan)}).`, 'danger');
     return;
   }
   if (!file) {
@@ -3098,25 +3304,15 @@ async function handleSubmitPayKas(e) {
   }
 
   try {
-    const bill = id ? state.iuranKas.find((i) => i.id === id) : null;
     const buktiUrl = await db.uploadFile(file, 'bukti_kas');
     const nowIso = new Date().toISOString();
 
     if (id && bill) {
-      const sudahTerverifikasi =
-        bill.status === 'Menunggu Verifikasi'
-          ? Number(bill.nominal_terverifikasi || 0)
-          : Number(bill.nominal_dibayar || 0);
-      const sisaTagihan = Math.max(0, Number(bill.nominal_tagihan || 0) - sudahTerverifikasi);
-
-      if (nominal > sisaTagihan) {
-        showToast(`Nominal melebihi sisa tunggakan (${formatRupiah(sisaTagihan)}).`, 'danger');
-        return;
-      }
-
       await db.update('iuran_kas', id, {
+        nominal_dibayar: sudahTerverifikasi, // pertahankan total yang sudah di-ACC sebelumnya
         nominal_terverifikasi: sudahTerverifikasi,
-        nominal_dibayar: nominal, // nominal cicilan yang baru diajukan
+        nominal_pending: nominal,
+        pj_nama: `${PENDING_PJ_PREFIX}${nominal}`,
         metode_bayar: state.selectedPayMethod,
         bukti_url: buktiUrl,
         status: 'Menunggu Verifikasi',
@@ -3127,7 +3323,10 @@ async function handleSubmitPayKas(e) {
         user_id: state.currentUser.id,
         periode: customPeriode,
         nominal_tagihan: nominal,
-        nominal_dibayar: nominal,
+        nominal_dibayar: 0,
+        nominal_terverifikasi: 0,
+        nominal_pending: nominal,
+        pj_nama: `${PENDING_PJ_PREFIX}${nominal}`,
         metode_bayar: state.selectedPayMethod,
         bukti_url: buktiUrl,
         status: 'Menunggu Verifikasi',
@@ -3769,16 +3968,50 @@ function resolveSessionPjMatkulName(sesi) {
   return '-';
 }
 
+function getHiddenMatkulSet() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.HIDDEN_MATKUL) || '[]');
+    if (Array.isArray(raw)) {
+      return new Set(raw.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+    }
+  } catch {
+    // Abaikan parse error
+  }
+  return new Set();
+}
+
+function hideMatkulFromCatalog(namaMatkul) {
+  const key = String(namaMatkul || '').trim().toLowerCase();
+  if (!key) return;
+  const set = getHiddenMatkulSet();
+  set.add(key);
+  localStorage.setItem(STORAGE_KEYS.HIDDEN_MATKUL, JSON.stringify(Array.from(set)));
+}
+
+function unhideMatkulInCatalog(namaMatkul) {
+  const key = String(namaMatkul || '').trim().toLowerCase();
+  if (!key) return;
+  const set = getHiddenMatkulSet();
+  if (set.delete(key)) {
+    localStorage.setItem(STORAGE_KEYS.HIDDEN_MATKUL, JSON.stringify(Array.from(set)));
+  }
+}
+
 function getMatkulCatalog() {
   const defaultPj = state.profiles.find((p) => p.role === 'pj_matkul');
+  const hiddenSet = getHiddenMatkulSet();
   const map = new Map();
-  DEFAULT_MATKUL_CATALOG.forEach((m) =>
-    map.set(m.mata_kuliah.toLowerCase(), {
-      ...m,
-      pj_matkul_id: defaultPj?.id || '',
-      pj_matkul_nama: defaultPj?.nama_lengkap || '',
-    })
-  );
+  DEFAULT_MATKUL_CATALOG.forEach((m) => {
+    const key = m.mata_kuliah.toLowerCase();
+    if (!hiddenSet.has(key)) {
+      map.set(key, {
+        ...m,
+        pj_matkul_id: defaultPj?.id || '',
+        pj_matkul_nama: defaultPj?.nama_lengkap || '',
+        is_default: true,
+      });
+    }
+  });
   state.sesiAbsensi.forEach((s) => {
     if (s.mata_kuliah && s.dosen) {
       const existing = map.get(s.mata_kuliah.toLowerCase());
@@ -3794,6 +4027,7 @@ function getMatkulCatalog() {
         sks: Number(s.sks || 2),
         pj_matkul_id: validPj?.id || existing?.pj_matkul_id || '',
         pj_matkul_nama: validPj?.nama_lengkap || existing?.pj_matkul_nama || '',
+        is_default: Boolean(existing?.is_default),
       });
     }
   });
@@ -3845,6 +4079,31 @@ function renderPjSelectOptions(selectedId = '') {
     .join('');
 }
 
+function getMatkulPertemuanStats(namaMatkul, sesiList = state.sesiAbsensi) {
+  const key = String(namaMatkul || '').trim().toLowerCase();
+  if (!key) return { maxPertemuan: 0, minNextPertemuan: 1, usedNumbers: [] };
+  const usedSet = new Set();
+  let maxPertemuan = 0;
+  (sesiList || []).forEach((s) => {
+    if (String(s.mata_kuliah || '').trim().toLowerCase() === key) {
+      const p = Number(s.pertemuan_ke || 0);
+      if (Number.isInteger(p) && p > 0) {
+        usedSet.add(p);
+        if (p > maxPertemuan) maxPertemuan = p;
+      }
+    }
+  });
+  return {
+    maxPertemuan,
+    minNextPertemuan: maxPertemuan + 1,
+    usedNumbers: Array.from(usedSet).sort((a, b) => a - b),
+  };
+}
+
+function getMaxPertemuanForMatkul(namaMatkul) {
+  return getMatkulPertemuanStats(namaMatkul).maxPertemuan;
+}
+
 function renderBukaSesiView() {
   const catalog = getMatkulCatalog();
   const firstMatkul = catalog[0] || { mata_kuliah: '', dosen: '', sks: 2, pj_matkul_id: '', pj_matkul_nama: '' };
@@ -3859,10 +4118,27 @@ function renderBukaSesiView() {
 
   const initSks = Number(firstMatkul.sks || 2);
   const initDurasi = initSks * 50;
+  const initMaxPertemuan = getMaxPertemuanForMatkul(firstMatkul.mata_kuliah);
+  const initNextPertemuan = initMaxPertemuan + 1;
   const sortedSesi = [...state.sesiAbsensi].sort((a, b) => {
     const da = String(a.tanggal || getWibDateKey(new Date(a.created_at || 0)));
     const dbDate = String(b.tanggal || getWibDateKey(new Date(b.created_at || 0)));
     return dbDate.localeCompare(da) || new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  });
+
+  const qSesiMatkul = (state.filters.sesiMatkulSearch || '').trim().toLowerCase();
+  const filteredSesi = sortedSesi.filter((s) => {
+    if (!qSesiMatkul) return true;
+    const pjMatkulDisp = resolveSessionPjMatkulName(s);
+    const searchable = `${s.mata_kuliah || ''} ${s.dosen || ''} ${pjMatkulDisp} ${s.pj_nama || ''} pert ${s.pertemuan_ke || ''}`.toLowerCase();
+    return searchable.includes(qSesiMatkul);
+  });
+
+  const qKatalogMatkul = (state.filters.katalogMatkulSearch || '').trim().toLowerCase();
+  const filteredCatalog = catalog.filter((m) => {
+    if (!qKatalogMatkul) return true;
+    const searchable = `${m.mata_kuliah || ''} ${m.dosen || ''} ${m.sks || ''} sks`.toLowerCase();
+    return searchable.includes(qKatalogMatkul);
   });
 
   return `
@@ -3884,15 +4160,26 @@ function renderBukaSesiView() {
         <form id="form-buka-sesi">
           <div class="field-group">
             <label for="sesi-matkul-preset">Pilih Mata Kuliah (Otomatis Isi &amp; Kunci Mata Kuliah, Dosen, SKS)</label>
-            <select id="sesi-matkul-preset">
-              ${catalog
-                .map(
-                  (m, idx) =>
-                    `<option value="${idx}" data-matkul="${escapeHtml(m.mata_kuliah)}" data-dosen="${escapeHtml(m.dosen)}" data-sks="${m.sks}" data-pj-matkul-id="${escapeHtml(m.pj_matkul_id || '')}" data-pj-matkul-nama="${escapeHtml(m.pj_matkul_nama || '')}">${escapeHtml(m.mata_kuliah)} — ${escapeHtml(m.dosen)} (${m.sks} SKS)</option>`
-                )
-                .join('')}
-              <option value="custom">-- Masukkan Mata Kuliah &amp; Dosen Baru --</option>
-            </select>
+            <div class="input-with-btn">
+              <select id="sesi-matkul-preset">
+                ${catalog
+                  .map(
+                    (m, idx) =>
+                      `<option value="${idx}" data-matkul="${escapeHtml(m.mata_kuliah)}" data-dosen="${escapeHtml(m.dosen)}" data-sks="${m.sks}" data-pj-matkul-id="${escapeHtml(m.pj_matkul_id || '')}" data-pj-matkul-nama="${escapeHtml(m.pj_matkul_nama || '')}">${escapeHtml(m.mata_kuliah)} — ${escapeHtml(m.dosen)} (${m.sks} SKS)</option>`
+                  )
+                  .join('')}
+                <option value="custom" ${catalog.length === 0 ? 'selected' : ''}>-- Masukkan Mata Kuliah &amp; Dosen Baru --</option>
+              </select>
+              <button
+                type="button"
+                id="btn-delete-matkul-preset"
+                class="btn btn-danger-soft btn-sm"
+                ${catalog.length === 0 ? 'disabled' : ''}
+                title="Hapus mata kuliah yang dipilih dari daftar"
+              >
+                Hapus
+              </button>
+            </div>
           </div>
 
           <div class="grid-2" style="margin-bottom:0;">
@@ -3954,7 +4241,25 @@ function renderBukaSesiView() {
           <div class="grid-2" style="margin-bottom:0;">
             <div class="field-group">
               <label for="sesi-pertemuan">Pertemuan Ke-</label>
-              <input type="number" id="sesi-pertemuan" min="1" value="${Number(state.pengaturan?.pertemuan_berjalan ?? 0) + 1}" required />
+              <input
+                type="number"
+                id="sesi-pertemuan"
+                min="${initNextPertemuan}"
+                step="1"
+                inputmode="numeric"
+                value="${initNextPertemuan}"
+                required
+              />
+              <span id="sesi-pertemuan-hint" class="meta-line" style="display:block;margin-top:4px;">
+                ${
+                  initMaxPertemuan > 1
+                    ? `Pertemuan ke-1 s.d. ke-${initMaxPertemuan} sudah digunakan · Minimal berikutnya: Pertemuan ke-${initNextPertemuan}`
+                    : initMaxPertemuan === 1
+                    ? `Pertemuan ke-1 sudah digunakan · Minimal berikutnya: Pertemuan ke-2`
+                    : 'Belum ada pertemuan · Mulai dari Pertemuan ke-1'
+                }
+              </span>
+              <span id="sesi-pertemuan-error" class="meta-line hidden" style="display:block;margin-top:4px;color:#ef4444;font-weight:600;"></span>
             </div>
             <div class="field-group">
               <label for="sesi-pj">Penanggung Jawab Sesi (Akun Aktif · Terkunci)</label>
@@ -3989,7 +4294,7 @@ function renderBukaSesiView() {
             <input type="datetime-local" id="sesi-batas" required />
           </div>
 
-          <button type="submit" class="btn btn-primary btn-block" ${pjMatkulList.length === 0 ? 'disabled' : ''}>Simpan &amp; Aktifkan Absensi</button>
+          <button type="submit" id="btn-submit-buka-sesi" class="btn btn-primary btn-block" ${pjMatkulList.length === 0 ? 'disabled' : ''}>Simpan &amp; Aktifkan Absensi</button>
         </form>
       </div>
 
@@ -3999,6 +4304,15 @@ function renderBukaSesiView() {
             <h3>Daftar Sesi Mata Kuliah</h3>
             <span class="meta-line">Terurut terbaru · Tanggal (DD/MM/YYYY), SKS, durasi, &amp; penanggung jawab mata kuliah</span>
           </div>
+          <span class="status-tag tag-info tabular-nums">${filteredSesi.length}/${sortedSesi.length} Sesi</span>
+        </div>
+        <div class="toolbar-filters">
+          <input
+            type="search"
+            id="filter-sesi-matkul-search"
+            placeholder="Cari mata kuliah, dosen, PJ matkul, atau pertemuan..."
+            value="${escapeHtml(state.filters.sesiMatkulSearch || '')}"
+          />
         </div>
         <div class="table-wrap">
           <table>
@@ -4013,9 +4327,9 @@ function renderBukaSesiView() {
             </thead>
             <tbody>
               ${
-                sortedSesi.length === 0
-                  ? '<tr><td colspan="5" class="text-center">Belum ada sesi absensi.</td></tr>'
-                  : sortedSesi
+                filteredSesi.length === 0
+                  ? `<tr><td colspan="5" class="text-center">${sortedSesi.length === 0 ? 'Belum ada sesi absensi.' : 'Tidak ada sesi mata kuliah yang cocok dengan pencarian.'}</td></tr>`
+                  : filteredSesi
                       .map((s) => {
                         const open = s.is_active && new Date(s.batas_waktu).getTime() > Date.now();
                         const sks = Number(s.sks || 2);
@@ -4038,9 +4352,21 @@ function renderBukaSesiView() {
                             </td>
                             <td><span class="status-tag ${open ? 'tag-success' : 'tag-danger'}">${open ? 'Dibuka' : 'Ditutup'}</span></td>
                             <td>
-                              <button type="button" class="btn btn-secondary btn-sm btn-toggle-sesi" data-id="${s.id}" data-active="${s.is_active}">
-                                ${s.is_active ? 'Tutup Sesi' : 'Aktifkan'}
-                              </button>
+                              <div class="row-actions">
+                                <button type="button" class="btn btn-secondary btn-sm btn-toggle-sesi" data-id="${s.id}" data-active="${s.is_active}">
+                                  ${s.is_active ? 'Tutup Sesi' : 'Aktifkan'}
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn btn-danger-soft btn-sm btn-delete-sesi"
+                                  data-id="${s.id}"
+                                  data-matkul="${escapeHtml(s.mata_kuliah)}"
+                                  data-pertemuan="${escapeHtml(String(s.pertemuan_ke || 1))}"
+                                  title="Hapus sesi mata kuliah"
+                                >
+                                  Hapus
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         `;
@@ -4050,6 +4376,69 @@ function renderBukaSesiView() {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <div class="card glass-panel mt-4">
+      <div class="card-header">
+        <div>
+          <h3>Daftar Mata Kuliah</h3>
+          <span class="meta-line">Kelola daftar mata kuliah kelas · Klik Hapus untuk menghapus mata kuliah beserta sesinya jika salah input</span>
+        </div>
+        <span class="status-tag tag-info tabular-nums">${filteredCatalog.length}/${catalog.length} Mata Kuliah</span>
+      </div>
+      <div class="toolbar-filters">
+        <input
+          type="search"
+          id="filter-katalog-matkul-search"
+          placeholder="Cari nama mata kuliah, dosen pengampu, atau SKS..."
+          value="${escapeHtml(state.filters.katalogMatkulSearch || '')}"
+        />
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Nama Mata Kuliah</th>
+              <th>Dosen Pengampu</th>
+              <th>SKS &amp; Durasi</th>
+              <th>Total Sesi</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              filteredCatalog.length === 0
+                ? `<tr><td colspan="5" class="text-center">${catalog.length === 0 ? 'Belum ada mata kuliah di daftar.' : 'Tidak ada mata kuliah yang cocok dengan pencarian.'}</td></tr>`
+                : filteredCatalog
+                    .map((m) => {
+                      const sesiCount = state.sesiAbsensi.filter(
+                        (s) => String(s.mata_kuliah || '').trim().toLowerCase() === m.mata_kuliah.trim().toLowerCase()
+                      ).length;
+                      const sks = Number(m.sks || 2);
+                      return `
+                        <tr>
+                          <td><strong>${escapeHtml(m.mata_kuliah)}</strong></td>
+                          <td>${escapeHtml(m.dosen)}</td>
+                          <td class="tabular-nums">${sks} SKS (${sks * 50} menit)</td>
+                          <td class="tabular-nums">${sesiCount} Sesi</td>
+                          <td>
+                            <button
+                              type="button"
+                              class="btn btn-danger-soft btn-sm btn-delete-matkul"
+                              data-matkul="${escapeHtml(m.mata_kuliah)}"
+                              title="Hapus mata kuliah ini"
+                            >
+                              Hapus
+                            </button>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join('')
+            }
+          </tbody>
+        </table>
       </div>
     </div>
   `;
@@ -4096,8 +4485,97 @@ function bindBukaSesiEvents() {
     if (previewLabel) previewLabel.textContent = formatWibShort(end.toISOString());
   };
 
+  const syncDeletePresetBtn = (isCustom) => {
+    const delBtn = document.getElementById('btn-delete-matkul-preset');
+    if (delBtn) delBtn.disabled = Boolean(isCustom);
+  };
+
+  const updateSubmitBtnDisabledState = (pertemuanInvalid = false) => {
+    const submitBtn = document.getElementById('btn-submit-buka-sesi');
+    if (!submitBtn) return;
+    const hasPjMatkul = getPjMatkulProfiles().length > 0;
+    submitBtn.disabled = !hasPjMatkul || Boolean(pertemuanInvalid);
+  };
+
+  const validatePertemuanInput = ({ autoSnap = false, showNotice = false } = {}) => {
+    const input = document.getElementById('sesi-pertemuan');
+    const errorEl = document.getElementById('sesi-pertemuan-error');
+    const matkulName = document.getElementById('sesi-matkul')?.value || '';
+    const { maxPertemuan, minNextPertemuan, usedNumbers } = getMatkulPertemuanStats(matkulName);
+    if (!input) return true;
+
+    input.min = String(minNextPertemuan);
+    const raw = String(input.value || '').trim();
+    const parsed = Number(raw);
+    const isEmptyOrNonInt = !raw || !/^\d+$/.test(raw) || !Number.isInteger(parsed);
+    const isAlreadyUsed = !isEmptyOrNonInt && usedNumbers.includes(parsed);
+    const isBelowMin = !isEmptyOrNonInt && parsed < minNextPertemuan;
+
+    if (isEmptyOrNonInt || isAlreadyUsed || isBelowMin) {
+      const errMsg = isEmptyOrNonInt
+        ? `Nomor pertemuan wajib berupa angka bulat minimal Pertemuan ke-${minNextPertemuan}.`
+        : isAlreadyUsed
+        ? `Pertemuan ke-${parsed} sudah pernah digunakan di database! Minimal berikutnya adalah Pertemuan ke-${minNextPertemuan}.`
+        : `Pertemuan ke-${parsed} tidak dapat digunakan karena pertemuan tertinggi saat ini ke-${maxPertemuan}. Minimal berikutnya adalah Pertemuan ke-${minNextPertemuan}.`;
+
+      if (autoSnap) {
+        input.value = String(minNextPertemuan);
+        input.setCustomValidity('');
+        input.style.borderColor = '';
+        if (errorEl) {
+          errorEl.textContent = '';
+          errorEl.classList.add('hidden');
+        }
+        updateSubmitBtnDisabledState(false);
+        if (showNotice) showToast(errMsg, 'warning');
+        return false;
+      }
+
+      input.setCustomValidity(errMsg);
+      input.style.borderColor = '#ef4444';
+      if (errorEl) {
+        errorEl.textContent = errMsg;
+        errorEl.classList.remove('hidden');
+      }
+      updateSubmitBtnDisabledState(true);
+      if (showNotice) showToast(errMsg, 'warning');
+      return false;
+    }
+
+    input.setCustomValidity('');
+    input.style.borderColor = '';
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
+    updateSubmitBtnDisabledState(false);
+    return true;
+  };
+
+  const syncPertemuanConstraint = (matkulName) => {
+    const input = document.getElementById('sesi-pertemuan');
+    const hint = document.getElementById('sesi-pertemuan-hint');
+    const { maxPertemuan: maxP, minNextPertemuan: minNext } = getMatkulPertemuanStats(matkulName);
+    if (input) {
+      input.min = String(minNext);
+      input.value = String(minNext);
+    }
+    if (hint) {
+      hint.textContent =
+        maxP > 1
+          ? `Pertemuan ke-1 s.d. ke-${maxP} sudah digunakan · Minimal berikutnya: Pertemuan ke-${minNext}`
+          : maxP === 1
+          ? `Pertemuan ke-1 sudah digunakan · Minimal berikutnya: Pertemuan ke-2`
+          : 'Belum ada pertemuan · Mulai dari Pertemuan ke-1';
+    }
+    validatePertemuanInput({ autoSnap: false, showNotice: false });
+  };
+
   const presetEl = document.getElementById('sesi-matkul-preset');
-  applyMatkulPresetLockState(presetEl?.value === 'custom');
+  const initialIsCustom = !presetEl || presetEl.value === 'custom';
+  applyMatkulPresetLockState(initialIsCustom);
+  syncDeletePresetBtn(initialIsCustom);
+  syncPertemuanConstraint(document.getElementById('sesi-matkul')?.value || '');
   recalcSesiDeadline();
 
   presetEl?.addEventListener('change', (e) => {
@@ -4109,9 +4587,11 @@ function bindBukaSesiEvents() {
     const isCustom = e.target.value === 'custom';
 
     applyMatkulPresetLockState(isCustom);
+    syncDeletePresetBtn(isCustom);
     if (isCustom) {
       matkulInput.value = '';
       dosenInput.value = '';
+      syncPertemuanConstraint('');
       matkulInput.focus();
     } else if (opt) {
       matkulInput.value = opt.getAttribute('data-matkul') || '';
@@ -4133,8 +4613,56 @@ function bindBukaSesiEvents() {
           }
         }
       }
+      syncPertemuanConstraint(matkulInput.value);
     }
     recalcSesiDeadline();
+  });
+
+  document.getElementById('sesi-matkul')?.addEventListener('input', (e) => {
+    if (!e.target.readOnly) {
+      syncPertemuanConstraint(e.target.value);
+    }
+  });
+
+  const pertemuanInputEl = document.getElementById('sesi-pertemuan');
+  pertemuanInputEl?.addEventListener('keydown', (e) => {
+    if (['-', '+', '.', ',', 'e', 'E'].includes(e.key)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      const matkulName = document.getElementById('sesi-matkul')?.value || '';
+      const { minNextPertemuan } = getMatkulPertemuanStats(matkulName);
+      const curVal = Number(pertemuanInputEl.value || minNextPertemuan);
+      if (curVal <= minNextPertemuan) {
+        e.preventDefault();
+        pertemuanInputEl.value = String(minNextPertemuan);
+        validatePertemuanInput({ autoSnap: false, showNotice: false });
+        showToast(
+          `Tidak dapat menurunkan di bawah Pertemuan ke-${minNextPertemuan}.`,
+          'warning'
+        );
+      }
+    }
+  });
+
+  pertemuanInputEl?.addEventListener('input', () => {
+    validatePertemuanInput({ autoSnap: false, showNotice: false });
+  });
+
+  pertemuanInputEl?.addEventListener('change', () => {
+    validatePertemuanInput({ autoSnap: true, showNotice: true });
+  });
+
+  pertemuanInputEl?.addEventListener('blur', () => {
+    validatePertemuanInput({ autoSnap: true, showNotice: true });
+  });
+
+  document.getElementById('btn-delete-matkul-preset')?.addEventListener('click', () => {
+    const opt = presetEl?.selectedOptions?.[0];
+    if (!opt || presetEl.value === 'custom') return;
+    const matkul = opt.getAttribute('data-matkul') || '';
+    if (matkul) hapusMataKuliah(matkul);
   });
 
   ['sesi-tanggal', 'sesi-jam-mulai', 'sesi-sks'].forEach((id) => {
@@ -4149,6 +4677,12 @@ function bindBukaSesiEvents() {
     const sks = Number(document.getElementById('sesi-sks').value || 2);
     const durasi_menit = sks * 50;
     const pertemuan_ke = Number(document.getElementById('sesi-pertemuan').value);
+
+    if (!validatePertemuanInput({ autoSnap: true, showNotice: true })) {
+      document.getElementById('sesi-pertemuan')?.focus();
+      return;
+    }
+
     const pjId = state.currentUser.id;
     const pjNama = state.currentUser.nama_lengkap;
 
@@ -4168,7 +4702,43 @@ function bindBukaSesiEvents() {
     const link_daring = document.getElementById('sesi-link-daring')?.value.trim() || '';
     const batasRaw = document.getElementById('sesi-batas').value;
 
+    const submitBtn = document.getElementById('btn-submit-buka-sesi');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Memvalidasi & Menyimpan...';
+    }
+
     try {
+      // Validasi langsung ke database sebelum insert agar aman dari data usang / input paralel
+      let latestSessions = state.sesiAbsensi;
+      if (state.mode === 'supabase' && state.supabase) {
+        const { data: dbSessions, error: checkErr } = await state.supabase
+          .from('sesi_absensi')
+          .select('id, mata_kuliah, pertemuan_ke');
+        if (checkErr) throw checkErr;
+        latestSessions = dbSessions || [];
+      } else {
+        const local = getLocalDb();
+        latestSessions = local.sesi_absensi || [];
+      }
+
+      const dbStats = getMatkulPertemuanStats(mata_kuliah, latestSessions);
+      if (
+        !Number.isInteger(pertemuan_ke) ||
+        dbStats.usedNumbers.includes(pertemuan_ke) ||
+        pertemuan_ke < dbStats.minNextPertemuan
+      ) {
+        await db.loadAll();
+        syncPertemuanConstraint(mata_kuliah);
+        showToast(
+          `Ditolak database: Pertemuan ke-${pertemuan_ke} untuk "${mata_kuliah}" sudah digunakan atau lebih kecil dari pertemuan terakhir (ke-${dbStats.maxPertemuan}). Minimal berikutnya: Pertemuan ke-${dbStats.minNextPertemuan}.`,
+          'danger'
+        );
+        document.getElementById('sesi-pertemuan')?.focus();
+        return;
+      }
+
+      unhideMatkulInCatalog(mata_kuliah);
       await db.insert('sesi_absensi', {
         mata_kuliah,
         dosen,
@@ -4193,7 +4763,25 @@ function bindBukaSesiEvents() {
       );
       renderActiveTab();
     } catch (err) {
-      showToast(err.message || 'Gagal membuka sesi absensi.', 'danger');
+      const errMsg = String(err?.message || '');
+      if (
+        err?.code === '23505' ||
+        /pertemuan|duplicate|unique/i.test(errMsg)
+      ) {
+        await db.loadAll();
+        syncPertemuanConstraint(mata_kuliah);
+        showToast(
+          `Gagal menyimpan: Nomor pertemuan untuk "${mata_kuliah}" sudah terpakai atau lebih kecil dari pertemuan terakhir di database.`,
+          'danger'
+        );
+      } else {
+        showToast(errMsg || 'Gagal membuka sesi absensi.', 'danger');
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.textContent = 'Simpan & Aktifkan Absensi';
+        validatePertemuanInput({ autoSnap: false, showNotice: false });
+      }
     }
   });
 
@@ -4211,12 +4799,179 @@ function bindBukaSesiEvents() {
       }
     });
   });
+
+  document.querySelectorAll('.btn-delete-sesi').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      const matkul = btn.getAttribute('data-matkul') || 'mata kuliah ini';
+      const pertemuan = btn.getAttribute('data-pertemuan') || '';
+      hapusSesiMataKuliah(id, matkul, pertemuan);
+    });
+  });
+
+  document.querySelectorAll('.btn-delete-matkul').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const matkul = btn.getAttribute('data-matkul') || '';
+      if (matkul) hapusMataKuliah(matkul);
+    });
+  });
+
+  bindLiveSearchInput('filter-sesi-matkul-search', (val) => {
+    state.filters.sesiMatkulSearch = val;
+  });
+  bindLiveSearchInput('filter-katalog-matkul-search', (val) => {
+    state.filters.katalogMatkulSearch = val;
+  });
+}
+
+function openConfirmDeleteModal({ title = 'Konfirmasi Penghapusan', subtitle = '-', message, onConfirm }) {
+  const modal = document.getElementById('modal-confirm-delete');
+  const titleEl = document.getElementById('confirm-delete-title');
+  const subEl = document.getElementById('confirm-delete-subtitle');
+  const msgEl = document.getElementById('confirm-delete-message');
+  const execBtn = document.getElementById('btn-confirm-delete-exec');
+  if (!modal || !execBtn) return;
+
+  if (titleEl) titleEl.textContent = title;
+  if (subEl) subEl.textContent = subtitle;
+  if (msgEl) msgEl.textContent = message;
+
+  const freshBtn = execBtn.cloneNode(true);
+  execBtn.parentNode.replaceChild(freshBtn, execBtn);
+  freshBtn.disabled = false;
+  freshBtn.textContent = 'Ya, Hapus';
+
+  freshBtn.addEventListener('click', async () => {
+    freshBtn.disabled = true;
+    freshBtn.textContent = 'Menghapus...';
+    try {
+      await onConfirm();
+      closeModal('modal-confirm-delete');
+    } finally {
+      freshBtn.disabled = false;
+      freshBtn.textContent = 'Ya, Hapus';
+    }
+  });
+
+  modal.classList.remove('hidden');
+}
+
+function hapusMataKuliah(namaMatkul) {
+  const targetName = String(namaMatkul || '').trim();
+  if (!targetName) return;
+
+  const matchingSesi = state.sesiAbsensi.filter(
+    (s) => String(s.mata_kuliah || '').trim().toLowerCase() === targetName.toLowerCase()
+  );
+  const sesiIds = matchingSesi.map((s) => s.id);
+  const relatedAbsenCount = state.absensi.filter((a) => sesiIds.includes(a.sesi_id)).length;
+
+  const message =
+    sesiIds.length > 0
+      ? `Apakah Anda yakin ingin menghapus mata kuliah "${targetName}"? Tindakan ini juga akan menghapus ${sesiIds.length} sesi perkuliahan${relatedAbsenCount > 0 ? ` dan ${relatedAbsenCount} data absensi terkait` : ''} di database.`
+      : `Apakah Anda yakin ingin menghapus "${targetName}" dari daftar pilihan mata kuliah?`;
+
+  openConfirmDeleteModal({
+    title: 'Hapus Mata Kuliah',
+    subtitle: targetName,
+    message,
+    onConfirm: async () => {
+      try {
+        if (sesiIds.length > 0) {
+          if (state.mode === 'supabase' && state.supabase) {
+            const { error } = await state.supabase
+              .from('sesi_absensi')
+              .delete()
+              .in('id', sesiIds);
+            if (error) {
+              if (
+                error.code === '23503' ||
+                /foreign key|violates foreign key constraint/i.test(error.message || '')
+              ) {
+                throw new Error(
+                  'Gagal menghapus: Mata kuliah ini masih berelasi dengan data absensi (Foreign Key). Hapus data absensi terkait terlebih dahulu atau aktifkan ON DELETE CASCADE di Supabase.'
+                );
+              }
+              throw error;
+            }
+          } else {
+            for (const sid of sesiIds) {
+              await db.remove('sesi_absensi', sid);
+            }
+          }
+        }
+
+        hideMatkulFromCatalog(targetName);
+        await db.loadAll();
+        showToast(`Mata kuliah "${targetName}" berhasil dihapus.`, 'success');
+        renderSidebarNav();
+        renderActiveTab();
+      } catch (err) {
+        console.error('Error menghapus mata kuliah:', err);
+        showToast(err.message || 'Gagal menghapus mata kuliah.', 'danger');
+      }
+    },
+  });
+}
+
+function hapusSesiMataKuliah(id, namaMatkul = 'mata kuliah ini', pertemuanKe = '') {
+  if (!id) return;
+
+  const relatedAbsenCount = state.absensi.filter((a) => a.sesi_id === id).length;
+  const labelMatkul = pertemuanKe ? `${namaMatkul} (Pertemuan ke-${pertemuanKe})` : namaMatkul;
+  const message =
+    relatedAbsenCount > 0
+      ? `Apakah Anda yakin ingin menghapus sesi "${labelMatkul}"? Terdapat ${relatedAbsenCount} data absensi terkait yang juga akan ikut terhapus.`
+      : `Apakah Anda yakin ingin menghapus sesi "${labelMatkul}"? Tindakan ini tidak dapat dibatalkan.`;
+
+  openConfirmDeleteModal({
+    title: 'Hapus Sesi Mata Kuliah',
+    subtitle: labelMatkul,
+    message,
+    onConfirm: async () => {
+      try {
+        if (state.mode === 'supabase' && state.supabase) {
+          const { error } = await state.supabase.from('sesi_absensi').delete().eq('id', id);
+          if (error) {
+            if (
+              error.code === '23503' ||
+              /foreign key|violates foreign key constraint/i.test(error.message || '')
+            ) {
+              throw new Error(
+                'Gagal menghapus: Data sesi mata kuliah ini masih berelasi dengan data absensi (Foreign Key). Hapus data absensi terkait terlebih dahulu atau aktifkan ON DELETE CASCADE pada relasi tabel di Supabase.'
+              );
+            }
+            throw error;
+          }
+        } else {
+          await db.remove('sesi_absensi', id);
+        }
+
+        await db.loadAll();
+        showToast(`Sesi "${labelMatkul}" berhasil dihapus.`, 'success');
+        renderSidebarNav();
+        renderActiveTab();
+      } catch (err) {
+        console.error('Error menghapus sesi mata kuliah:', err);
+        showToast(err.message || 'Gagal menghapus data sesi mata kuliah.', 'danger');
+      }
+    },
+  });
 }
 
 function renderVerifikasiAbsenView() {
   const queue = state.absensi.filter((a) => a.status_verifikasi === 'Menunggu');
   const profileMap = Object.fromEntries(state.profiles.map((p) => [p.id, p]));
   const sesiMap = Object.fromEntries(state.sesiAbsensi.map((s) => [s.id, s]));
+  const q = (state.filters.verifikasiAbsenSearch || '').trim().toLowerCase();
+
+  const filteredQueue = queue.filter((a) => {
+    if (!q) return true;
+    const mhs = profileMap[a.user_id];
+    const sesi = sesiMap[a.sesi_id];
+    const searchable = `${mhs?.nama_lengkap || ''} ${mhs?.npm || ''} ${sesi?.mata_kuliah || ''} pertemuan ${sesi?.pertemuan_ke || ''} ${a.status_kehadiran || ''}`.toLowerCase();
+    return searchable.includes(q);
+  });
 
   return `
     <div class="page-header">
@@ -4228,6 +4983,15 @@ function renderVerifikasiAbsenView() {
     </div>
 
     <div class="card glass-panel">
+      <div class="toolbar-filters">
+        <input
+          type="search"
+          id="filter-verifikasi-absen-search"
+          placeholder="Cari absensi mahasiswa (nama, NIM, mata kuliah, atau pertemuan)..."
+          value="${escapeHtml(state.filters.verifikasiAbsenSearch || '')}"
+        />
+        <span class="status-tag tag-info tabular-nums">${filteredQueue.length}/${queue.length} Data</span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -4241,9 +5005,9 @@ function renderVerifikasiAbsenView() {
           </thead>
           <tbody>
             ${
-              queue.length === 0
-                ? '<tr><td colspan="5" class="text-center">Antrean verifikasi kosong. Semua kiriman telah diproses.</td></tr>'
-                  : queue
+              filteredQueue.length === 0
+                ? `<tr><td colspan="5" class="text-center">${queue.length === 0 ? 'Antrean verifikasi kosong. Semua kiriman telah diproses.' : 'Tidak ada antrean absensi mahasiswa yang cocok dengan pencarian.'}</td></tr>`
+                : filteredQueue
                     .map((a) => {
                       const mhs = profileMap[a.user_id];
                       const sesi = sesiMap[a.sesi_id];
@@ -4289,6 +5053,9 @@ function renderVerifikasiAbsenView() {
 function bindVerifikasiAbsenEvents() {
   bindImagePreviewButtons();
   bindGpsMapButtons();
+  bindLiveSearchInput('filter-verifikasi-absen-search', (val) => {
+    state.filters.verifikasiAbsenSearch = val;
+  });
 
   document.querySelectorAll('.btn-acc-absen').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -4380,9 +5147,87 @@ function bindVerifikasiAbsenEvents() {
   });
 }
 
+function getManualAbsensiKey(a, sesiMap) {
+  const sesi = sesiMap[a.sesi_id];
+  if (sesi && sesi.mata_kuliah) {
+    const mk = String(sesi.mata_kuliah || '').trim().toLowerCase();
+    const pert = Number(sesi.pertemuan_ke || 0);
+    return `mk:${mk}::p${pert}::u:${a.user_id}`;
+  }
+  return `sesi:${a.sesi_id}::u:${a.user_id}`;
+}
+
+function getManualAbsensiMeta() {
+  const sesiMap = Object.fromEntries(state.sesiAbsensi.map((s) => [s.id, s]));
+  const pairGroups = new Map();
+  state.absensi.forEach((a) => {
+    const key = getManualAbsensiKey(a, sesiMap);
+    if (!pairGroups.has(key)) pairGroups.set(key, []);
+    pairGroups.get(key).push(a);
+  });
+
+  const sortedAbsensi = [...state.absensi].sort(
+    (a, b) => new Date(b.waktu_kirim || b.created_at || 0) - new Date(a.waktu_kirim || a.created_at || 0)
+  );
+
+  const manualRecords = sortedAbsensi.filter((a) => {
+    const grp = pairGroups.get(getManualAbsensiKey(a, sesiMap)) || [];
+    const noteLooksManual = String(a.catatan || '').toLowerCase().includes('manual');
+    return Boolean(a.is_manual) || noteLooksManual || grp.length > 1;
+  });
+
+  const duplicateRecords = sortedAbsensi.filter((a) => {
+    const grp = pairGroups.get(getManualAbsensiKey(a, sesiMap)) || [];
+    return grp.length > 1;
+  });
+
+  const duplicateIdsToDelete = [];
+  pairGroups.forEach((grp) => {
+    if (grp.length <= 1) return;
+    const sortedGrp = [...grp].sort(
+      (a, b) => new Date(b.waktu_kirim || b.created_at || 0) - new Date(a.waktu_kirim || a.created_at || 0)
+    );
+    sortedGrp.slice(1).forEach((dup) => {
+      if (dup?.id) duplicateIdsToDelete.push(dup.id);
+    });
+  });
+
+  return { sesiMap, pairGroups, sortedAbsensi, manualRecords, duplicateRecords, duplicateIdsToDelete };
+}
+
+function renderManualExistingNoticeHtml(sesiId, studentId) {
+  if (!sesiId || !studentId) return '';
+  const sesiMap = Object.fromEntries(state.sesiAbsensi.map((s) => [s.id, s]));
+  const targetKey = getManualAbsensiKey({ sesi_id: sesiId, user_id: studentId }, sesiMap);
+  const matches = state.absensi
+    .filter((a) => getManualAbsensiKey(a, sesiMap) === targetKey)
+    .sort(
+      (a, b) => new Date(b.waktu_kirim || b.created_at || 0) - new Date(a.waktu_kirim || a.created_at || 0)
+    );
+  if (matches.length === 0) return '';
+  const latest = matches[0];
+  const dupNote =
+    matches.length > 1
+      ? `Terdapat <strong>${matches.length} data berulang/duplikat</strong> untuk mahasiswa &amp; pertemuan ini.`
+      : `Mahasiswa ini sudah tercatat <strong>${escapeHtml(latest.status_kehadiran)}</strong> (${latest.is_manual ? 'Manual PJ' : escapeHtml(latest.mode_absen || 'Mandiri')} · ${escapeHtml(formatWibShort(latest.waktu_kirim))}).`;
+  return `
+    <div class="card glass-panel" style="padding:12px 14px;margin-bottom:14px;border-color:rgba(245,158,11,0.45);background:rgba(245,158,11,0.08);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="meta-line" style="margin:0;color:var(--text-primary);">
+          <strong>Peringatan Data Sudah Ada:</strong> ${dupNote}
+        </div>
+        <button type="button" class="btn btn-danger-soft btn-sm btn-del-manual-absen" data-id="${latest.id}">
+          Hapus Data Ini
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function renderManualAbsenView() {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const u = state.currentUser;
+  const profileMap = Object.fromEntries(state.profiles.map((p) => [p.id, p]));
   const matkulList = Array.from(
     new Set(state.sesiAbsensi.map((s) => s.mata_kuliah).filter(Boolean))
   );
@@ -4390,6 +5235,32 @@ function renderManualAbsenView() {
   const initialSessions = [...state.sesiAbsensi]
     .filter((s) => !firstMatkul || s.mata_kuliah === firstMatkul)
     .sort((a, b) => Number(a.pertemuan_ke || 0) - Number(b.pertemuan_ke || 0));
+  const defaultSesiId = initialSessions[0]?.id || '';
+  const defaultStudentId = students[0]?.id || '';
+
+  const { sesiMap, pairGroups, sortedAbsensi, manualRecords, duplicateRecords, duplicateIdsToDelete } =
+    getManualAbsensiMeta();
+  const q = (state.filters.manualAbsenSearch || '').toLowerCase();
+  const mode = state.filters.manualAbsenMode || 'manual';
+
+  const baseList =
+    mode === 'dup' ? duplicateRecords : mode === 'all' ? sortedAbsensi : manualRecords;
+
+  const filteredManual = baseList.filter((a) => {
+    if (!q) return true;
+    const mhs = profileMap[a.user_id];
+    const sesi = sesiMap[a.sesi_id];
+    const text = `${mhs?.nama_lengkap || ''} ${mhs?.npm || ''} ${sesi?.mata_kuliah || ''} ${a.status_kehadiran || ''} ${a.pj_nama || ''} ${a.catatan || ''}`.toLowerCase();
+    return text.includes(q);
+  });
+
+  const visibleIdSet = new Set(filteredManual.map((a) => a.id));
+  state.filters.manualSelectedIds = (state.filters.manualSelectedIds || []).filter((id) =>
+    visibleIdSet.has(id)
+  );
+  const selectedSet = new Set(state.filters.manualSelectedIds);
+  const allVisibleSelected =
+    filteredManual.length > 0 && filteredManual.every((a) => selectedSet.has(a.id));
 
   return `
     <div class="page-header">
@@ -4399,7 +5270,7 @@ function renderManualAbsenView() {
       </div>
     </div>
 
-    <div class="card glass-panel" style="max-width:680px;">
+    <div class="card glass-panel" style="max-width:680px;margin-bottom:20px;">
       <div class="card-header">
         <div>
           <h3>Pencatatan Manual oleh ${escapeHtml(ROLE_LABELS[u.role] || u.role)}</h3>
@@ -4472,15 +5343,209 @@ function renderManualAbsenView() {
           <textarea id="manual-catatan" rows="2" placeholder="Contoh: Ponsel mahasiswa mengalami kendala saat di kelas" required></textarea>
         </div>
 
+        <div id="manual-existing-notice">${renderManualExistingNoticeHtml(defaultSesiId, defaultStudentId)}</div>
+
         <button type="submit" class="btn btn-primary btn-block">
           Lanjut Ambil Foto Penanggung Jawab &amp; GPS
         </button>
       </form>
     </div>
+
+    <div class="card glass-panel" id="manual-absensi-list-card">
+      <div class="card-header">
+        <div>
+          <h3>Daftar &amp; Hapus Absensi Manual / Duplikat</h3>
+          <span class="meta-line">
+            ${manualRecords.length} catatan manual/duplikat · ${
+              duplicateIdsToDelete.length > 0
+                ? `<strong class="text-warning">${duplicateIdsToDelete.length} data duplikat berulang siap dihapus</strong>`
+                : 'Tidak ada duplikat berulang terdeteksi'
+            }
+          </span>
+        </div>
+        <div class="row-actions">
+          ${
+            selectedSet.size > 0
+              ? `<button type="button" id="btn-delete-selected-manual" class="btn btn-danger-soft btn-sm">Hapus Terpilih (${selectedSet.size})</button>`
+              : ''
+          }
+          <button
+            type="button"
+            id="btn-cleanup-manual-dups"
+            class="btn ${duplicateIdsToDelete.length > 0 ? 'btn-danger-soft' : 'btn-secondary'} btn-sm"
+            title="Hapus otomatis data absensi yang terinput berulang kali dan sisakan catatan terbaru"
+          >
+            Hapus Duplikat (${duplicateIdsToDelete.length})
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-filters">
+        <input
+          type="search"
+          id="filter-manual-search"
+          placeholder="Cari nama mahasiswa, NPM, mata kuliah, PJ, atau alasan..."
+          value="${escapeHtml(state.filters.manualAbsenSearch || '')}"
+        />
+        <select id="filter-manual-mode">
+          <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Data Manual &amp; Duplikat (${manualRecords.length})</option>
+          <option value="dup" ${mode === 'dup' ? 'selected' : ''}>Hanya Duplikat / Berulang (${duplicateRecords.length})</option>
+          <option value="all" ${mode === 'all' ? 'selected' : ''}>Semua Data Absensi (${sortedAbsensi.length})</option>
+        </select>
+      </div>
+
+      <div class="table-wrap table-scroll-5-compact">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:38px;text-align:center;">
+                <input
+                  type="checkbox"
+                  id="chk-manual-select-all"
+                  aria-label="Pilih semua data yang tampil"
+                  ${allVisibleSelected ? 'checked' : ''}
+                  ${filteredManual.length === 0 ? 'disabled' : ''}
+                />
+              </th>
+              <th>Mahasiswa</th>
+              <th>Mata Kuliah &amp; Pertemuan</th>
+              <th>Status &amp; Keterangan</th>
+              <th>Penanggung Jawab</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              filteredManual.length === 0
+                ? '<tr><td colspan="6" class="text-center">Belum ada data absensi manual atau duplikat yang cocok.</td></tr>'
+                : filteredManual
+                    .map((a) => {
+                      const mhs = profileMap[a.user_id];
+                      const sesi = sesiMap[a.sesi_id];
+                      const grp = pairGroups.get(getManualAbsensiKey(a, sesiMap)) || [];
+                      const pairCount = grp.length;
+                      const sortedGrp =
+                        pairCount > 1
+                          ? [...grp].sort(
+                              (x, y) =>
+                                new Date(y.waktu_kirim || y.created_at || 0) -
+                                new Date(x.waktu_kirim || x.created_at || 0)
+                            )
+                          : [];
+                      const isOlderDup = pairCount > 1 && sortedGrp[0]?.id !== a.id;
+                      const isChecked = selectedSet.has(a.id);
+                      return `
+                        <tr>
+                          <td style="text-align:center;">
+                            <input
+                              type="checkbox"
+                              class="chk-manual-row"
+                              data-id="${a.id}"
+                              aria-label="Pilih baris absensi"
+                              ${isChecked ? 'checked' : ''}
+                            />
+                          </td>
+                          <td>
+                            <strong>${escapeHtml(mhs?.nama_lengkap || '-')}</strong>
+                            <div class="meta-line tabular-nums">${escapeHtml(mhs?.npm || '-')}</div>
+                          </td>
+                          <td>
+                            <strong>${escapeHtml(sesi?.mata_kuliah || '-')}</strong>
+                            <div class="meta-line tabular-nums">Pert. ${sesi?.pertemuan_ke || '-'} · ${escapeHtml(formatWibShort(a.waktu_kirim))}</div>
+                          </td>
+                          <td>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                              <span class="status-tag ${getStatusTagClass(a.status_kehadiran)}">${escapeHtml(a.status_kehadiran)}</span>
+                              ${
+                                pairCount > 1
+                                  ? `<span class="status-tag ${isOlderDup ? 'tag-danger' : 'tag-warning'}" title="Terinput ${pairCount} kali pada mata kuliah, pertemuan & mahasiswa yang sama">${isOlderDup ? `Duplikat Lama (${pairCount}x)` : `Duplikat Terbaru (${pairCount}x)`}</span>`
+                                  : ''
+                              }
+                            </div>
+                            <div class="meta-line">${escapeHtml(a.catatan || '-')}</div>
+                          </td>
+                          <td>
+                            <span class="status-tag ${getStatusTagClass(a.status_verifikasi)}">${escapeHtml(a.status_verifikasi)}</span>
+                            <div class="meta-line">${a.is_manual ? 'Manual PJ: ' : 'Mandiri: '}${escapeHtml(a.pj_nama || '-')}</div>
+                          </td>
+                          <td>
+                            <div class="row-actions">
+                              <button type="button" class="btn btn-secondary btn-sm btn-detail-absen" data-absen-id="${a.id}" data-sesi-id="${a.sesi_id}">Detail</button>
+                              <button type="button" class="btn btn-danger-soft btn-sm btn-del-manual-absen" data-id="${a.id}" title="Hapus absensi ini">
+                                Hapus
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
   `;
 }
 
+async function deleteAbsensiRecordsBatch(ids) {
+  const uniqueIds = Array.from(new Set((ids || []).filter(Boolean)));
+  if (!uniqueIds.length) return;
+  if (state.mode === 'supabase' && state.supabase) {
+    const { error } = await state.supabase.from('absensi').delete().in('id', uniqueIds);
+    if (error) throw error;
+  } else {
+    for (const id of uniqueIds) {
+      await db.remove('absensi', id);
+    }
+  }
+}
+
+function bindDeleteManualAbsenButtons() {
+  document.querySelectorAll('.btn-del-manual-absen').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      const absen = state.absensi.find((a) => a.id === id);
+      if (!absen) return;
+      const mhs = state.profiles.find((p) => p.id === absen.user_id);
+      const sesi = state.sesiAbsensi.find((s) => s.id === absen.sesi_id);
+      const subtitle = `${mhs?.nama_lengkap || 'Mahasiswa'} (${mhs?.npm || '-'})`;
+      const sesiLabel = sesi ? `${sesi.mata_kuliah} Pertemuan ke-${sesi.pertemuan_ke}` : 'sesi terkait';
+
+      openConfirmDeleteModal({
+        title: 'Hapus Data Absensi',
+        subtitle,
+        message: `Apakah Anda yakin ingin menghapus data absensi "${absen.status_kehadiran}" untuk ${subtitle} pada ${sesiLabel} (${formatWibShort(absen.waktu_kirim)})?`,
+        onConfirm: async () => {
+          try {
+            await db.remove('absensi', id);
+            state.filters.manualSelectedIds = (state.filters.manualSelectedIds || []).filter(
+              (sid) => sid !== id
+            );
+            await db.loadAll();
+            showToast(`Data absensi ${mhs?.nama_lengkap || ''} berhasil dihapus.`, 'success');
+            renderSidebarNav();
+            renderActiveTab();
+          } catch (err) {
+            showToast(err.message || 'Gagal menghapus data absensi.', 'danger');
+          }
+        },
+      });
+    });
+  });
+}
+
 function bindManualAbsenEvents() {
+  const refreshExistingNotice = () => {
+    const noticeBox = document.getElementById('manual-existing-notice');
+    const sesiId = document.getElementById('manual-pertemuan')?.value || '';
+    const studentId = document.getElementById('manual-student')?.value || '';
+    if (noticeBox) {
+      noticeBox.innerHTML = renderManualExistingNoticeHtml(sesiId, studentId);
+      bindDeleteManualAbsenButtons();
+    }
+  };
+
   document.getElementById('manual-matkul')?.addEventListener('change', (e) => {
     const selectedMatkul = e.target.value;
     const pertSelect = document.getElementById('manual-pertemuan');
@@ -4494,7 +5559,11 @@ function bindManualAbsenEvents() {
         : matching
             .map((s) => `<option value="${s.id}">Pertemuan ${s.pertemuan_ke}</option>`)
             .join('');
+    refreshExistingNotice();
   });
+
+  document.getElementById('manual-pertemuan')?.addEventListener('change', refreshExistingNotice);
+  document.getElementById('manual-student')?.addEventListener('change', refreshExistingNotice);
 
   document.getElementById('form-manual-pj')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -4521,6 +5590,107 @@ function bindManualAbsenEvents() {
       catatan,
     });
   });
+
+  document.getElementById('filter-manual-search')?.addEventListener('input', (e) => {
+    state.filters.manualAbsenSearch = e.target.value;
+    renderActiveTab();
+    const el = document.getElementById('filter-manual-search');
+    if (el) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+  });
+
+  document.getElementById('filter-manual-mode')?.addEventListener('change', (e) => {
+    state.filters.manualAbsenMode = e.target.value;
+    state.filters.manualSelectedIds = [];
+    renderActiveTab();
+  });
+
+  document.getElementById('chk-manual-select-all')?.addEventListener('change', (e) => {
+    const checked = Boolean(e.target.checked);
+    const rowCheckboxes = Array.from(document.querySelectorAll('.chk-manual-row'));
+    state.filters.manualSelectedIds = checked
+      ? rowCheckboxes.map((cb) => cb.getAttribute('data-id')).filter(Boolean)
+      : [];
+    renderActiveTab();
+  });
+
+  document.querySelectorAll('.chk-manual-row').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const id = cb.getAttribute('data-id');
+      if (!id) return;
+      const current = new Set(state.filters.manualSelectedIds || []);
+      if (cb.checked) current.add(id);
+      else current.delete(id);
+      state.filters.manualSelectedIds = Array.from(current);
+      renderActiveTab();
+    });
+  });
+
+  document.getElementById('btn-delete-selected-manual')?.addEventListener('click', () => {
+    const selectedIds = [...(state.filters.manualSelectedIds || [])];
+    if (!selectedIds.length) {
+      showToast('Pilih minimal satu data absensi untuk dihapus.', 'info');
+      return;
+    }
+    openConfirmDeleteModal({
+      title: 'Hapus Data Absensi Terpilih',
+      subtitle: `${selectedIds.length} Data Dipilih`,
+      message: `Apakah Anda yakin ingin menghapus ${selectedIds.length} data absensi yang Anda pilih? Tindakan ini tidak dapat dibatalkan.`,
+      onConfirm: async () => {
+        try {
+          await deleteAbsensiRecordsBatch(selectedIds);
+          state.filters.manualSelectedIds = [];
+          await db.loadAll();
+          showToast(`${selectedIds.length} data absensi terpilih berhasil dihapus.`, 'success');
+          renderSidebarNav();
+          renderActiveTab();
+        } catch (err) {
+          showToast(err.message || 'Gagal menghapus data absensi terpilih.', 'danger');
+        }
+      },
+    });
+  });
+
+  document.querySelectorAll('.btn-detail-absen').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openDetailAbsenModal(
+        btn.getAttribute('data-absen-id'),
+        btn.getAttribute('data-sesi-id')
+      );
+    });
+  });
+
+  document.getElementById('btn-cleanup-manual-dups')?.addEventListener('click', () => {
+    const { duplicateIdsToDelete } = getManualAbsensiMeta();
+    if (!duplicateIdsToDelete.length) {
+      showToast(
+        'Tidak ada data absensi duplikat saat ini. Centang baris atau klik Hapus pada baris jika ingin menghapus data tertentu.',
+        'info'
+      );
+      return;
+    }
+    openConfirmDeleteModal({
+      title: 'Hapus Duplikat Absensi Berulang',
+      subtitle: `${duplicateIdsToDelete.length} Data Duplikat`,
+      message: `Sistem akan menyimpan 1 catatan terbaru untuk setiap mahasiswa & pertemuan, lalu menghapus ${duplicateIdsToDelete.length} catatan duplikat lama yang terinput berulang kali. Lanjutkan?`,
+      onConfirm: async () => {
+        try {
+          await deleteAbsensiRecordsBatch(duplicateIdsToDelete);
+          state.filters.manualSelectedIds = [];
+          await db.loadAll();
+          showToast(`${duplicateIdsToDelete.length} data absensi duplikat berhasil dihapus.`, 'success');
+          renderSidebarNav();
+          renderActiveTab();
+        } catch (err) {
+          showToast(err.message || 'Gagal menghapus data duplikat absensi.', 'danger');
+        }
+      },
+    });
+  });
+
+  bindDeleteManualAbsenButtons();
 }
 
 function renderRiwayatDanCutiView() {
@@ -5048,13 +6218,30 @@ function bindSaluranTagihanEvents() {
     }
 
     try {
+      const periodeKey = periode.trim().toLowerCase();
+      const targetStudents = students.filter(
+        (m) =>
+          !state.iuranKas.some(
+            (b) => b.user_id === m.id && String(b.periode || '').trim().toLowerCase() === periodeKey
+          )
+      );
+      if (targetStudents.length === 0) {
+        showToast(
+          `Tagihan untuk periode "${periode}" sudah pernah diterbitkan ke seluruh anggota kelas.`,
+          'warning'
+        );
+        return;
+      }
+
       const pjId = state.currentUser.id;
       const pjNama = state.currentUser.nama_lengkap;
-      const payloads = students.map((m) => ({
+      const payloads = targetStudents.map((m) => ({
         user_id: m.id,
         periode,
         nominal_tagihan: nominal,
         nominal_dibayar: 0,
+        nominal_terverifikasi: 0,
+        nominal_pending: 0,
         metode_bayar: null,
         bukti_url: '',
         pj_id: pjId,
@@ -5064,7 +6251,7 @@ function bindSaluranTagihanEvents() {
       }));
       await db.insert('iuran_kas', payloads);
 
-      const notifPayloads = students.map((m) => ({
+      const notifPayloads = targetStudents.map((m) => ({
         user_id: m.id,
         judul: `Tagihan Kas Baru: ${periode}`,
         pesan: `Tagihan kas sebesar ${formatRupiah(nominal)} telah diterbitkan oleh ${pjNama}.`,
@@ -5073,7 +6260,7 @@ function bindSaluranTagihanEvents() {
       }));
       await db.insert('pemberitahuan', notifPayloads);
       await db.loadAll();
-      showToast(`Tagihan Kas ${periode} (PJ: ${pjNama}) berhasil disebar ke ${students.length} anggota kelas!`, 'success');
+      showToast(`Tagihan Kas ${periode} (PJ: ${pjNama}) berhasil disebar ke ${targetStudents.length} anggota kelas!`, 'success');
       e.target.reset();
       updatePeriodePreview();
     } catch (err) {
@@ -5087,6 +6274,27 @@ function renderDaftarPembayaranView() {
   const pendingBills = state.iuranKas.filter((i) => i.status === 'Menunggu Verifikasi');
   const profileMap = Object.fromEntries(state.profiles.map((p) => [p.id, p]));
 
+  const q = (state.filters.pembayaranSearch || '').trim().toLowerCase();
+  const statusFilter = state.filters.pembayaranStatus || 'Semua';
+
+  const filteredPendingBills = pendingBills.filter((b) => {
+    if (!q) return true;
+    const mhs = profileMap[b.user_id];
+    const searchable = `${mhs?.nama_lengkap || ''} ${mhs?.npm || ''} ${ROLE_LABELS[mhs?.role] || mhs?.role || ''} ${b.periode || ''} ${b.metode_bayar || ''}`.toLowerCase();
+    return searchable.includes(q);
+  });
+
+  const filteredStudents = students.filter((m) => {
+    const ks = getStudentKasStats(m.id);
+    const totalBayar = ks.sudahBayar;
+    const sisa = ks.tunggakan;
+    const statusLabel = sisa <= 0 ? 'Lunas' : totalBayar > 0 ? 'Sebagian' : 'Belum Lunas';
+    if (statusFilter !== 'Semua' && statusLabel !== statusFilter) return false;
+    if (!q) return true;
+    const searchable = `${m.nama_lengkap || ''} ${m.npm || ''} ${ROLE_LABELS[m.role] || m.role || ''} ${statusLabel}`.toLowerCase();
+    return searchable.includes(q);
+  });
+
   return `
     <div class="page-header">
       <div>
@@ -5096,13 +6304,32 @@ function renderDaftarPembayaranView() {
       <span class="status-tag tag-coral tabular-nums">${pendingBills.length} Bukti Menunggu Verifikasi</span>
     </div>
 
+    <div class="card glass-panel" style="margin-bottom:20px;padding:14px 16px;">
+      <div class="toolbar-filters" style="margin-bottom:0;">
+        <input
+          type="search"
+          id="filter-pembayaran-search"
+          placeholder="Cari daftar kas mahasiswa (nama, NIM, peran, periode, atau metode)..."
+          value="${escapeHtml(state.filters.pembayaranSearch || '')}"
+        />
+        <select id="filter-pembayaran-status" aria-label="Filter status kas mahasiswa">
+          <option value="Semua" ${statusFilter === 'Semua' ? 'selected' : ''}>Semua Status Kas</option>
+          <option value="Belum Lunas" ${statusFilter === 'Belum Lunas' ? 'selected' : ''}>Belum Lunas</option>
+          <option value="Sebagian" ${statusFilter === 'Sebagian' ? 'selected' : ''}>Sebagian (Cicilan)</option>
+          <option value="Lunas" ${statusFilter === 'Lunas' ? 'selected' : ''}>Lunas</option>
+        </select>
+        <span class="status-tag tag-info tabular-nums">${filteredStudents.length}/${students.length} Anggota</span>
+      </div>
+    </div>
+
     <!-- Antrean Verifikasi Bukti Transfer -->
     <div class="card glass-panel" style="margin-bottom:20px;">
       <div class="card-header">
         <div>
           <h3>Antrean Verifikasi Pembayaran Kas</h3>
-          <span class="meta-line">Klik Terima Kas untuk mengubah status Lunas dan otomatis menambah pemasukan kas</span>
+          <span class="meta-line">Klik Terima Kas untuk menyetujui setoran (otomatis Lunas jika penuh, atau Sebagian jika cicilan)</span>
         </div>
+        <span class="status-tag tag-info tabular-nums">${filteredPendingBills.length}/${pendingBills.length} Antrean</span>
       </div>
       <div class="table-wrap">
         <table>
@@ -5117,11 +6344,14 @@ function renderDaftarPembayaranView() {
           </thead>
           <tbody>
             ${
-              pendingBills.length === 0
-                ? '<tr><td colspan="5" class="text-center">Tidak ada bukti pembayaran menunggu verifikasi.</td></tr>'
-                : pendingBills
+              filteredPendingBills.length === 0
+                ? `<tr><td colspan="5" class="text-center">${pendingBills.length === 0 ? 'Tidak ada bukti pembayaran menunggu verifikasi.' : 'Tidak ada antrean pembayaran yang cocok dengan pencarian.'}</td></tr>`
+                : filteredPendingBills
                     .map((b) => {
                       const mhs = profileMap[b.user_id];
+                      const pendingAmt = getBillPendingAmount(b);
+                      const verifiedSoFar = getBillVerifiedPaid(b);
+                      const tagihan = Number(b.nominal_tagihan || 0);
                       return `
                         <tr>
                           <td>
@@ -5132,7 +6362,10 @@ function renderDaftarPembayaranView() {
                             <strong>${escapeHtml(b.periode)}</strong>
                             <div class="meta-line">${escapeHtml(b.metode_bayar || '-')} · ${escapeHtml(formatWibShort(b.tanggal_bayar))}</div>
                           </td>
-                          <td class="tabular-nums">${formatRupiah(b.nominal_dibayar || b.nominal_tagihan)}</td>
+                          <td class="tabular-nums">
+                            <strong>${formatRupiah(pendingAmt)}</strong>
+                            <div class="meta-line">Tagihan: ${formatRupiah(tagihan)} · Terbayar: ${formatRupiah(verifiedSoFar)}</div>
+                          </td>
                           <td>
                             ${
                               b.bukti_url
@@ -5161,7 +6394,7 @@ function renderDaftarPembayaranView() {
       <div class="card-header">
         <div>
           <h3>Rekapitulasi Pembayaran &amp; Tunggakan Anggota</h3>
-          <span class="meta-line">Kirim pengingat lewat WhatsApp atau kotak notifikasi portal</span>
+          <span class="meta-line">Total sudah dibayar &amp; sisa tunggakan dihitung berdasarkan akumulasi nominal rupiah terverifikasi</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -5176,35 +6409,41 @@ function renderDaftarPembayaranView() {
             </tr>
           </thead>
           <tbody>
-            ${students
-              .map((m) => {
-                const ks = getStudentKasStats(m.id);
-                const totalBayar = ks.sudahBayar;
-                const sisa = ks.tunggakan;
+            ${
+              filteredStudents.length === 0
+                ? `<tr><td colspan="5" class="text-center">${students.length === 0 ? 'Belum ada anggota kas terdaftar.' : 'Tidak ada daftar kas mahasiswa yang cocok dengan pencarian.'}</td></tr>`
+                : filteredStudents
+                    .map((m) => {
+                      const ks = getStudentKasStats(m.id);
+                      const totalBayar = ks.sudahBayar;
+                      const sisa = ks.tunggakan;
+                      const statusTxt = sisa <= 0 ? 'Aman / Lunas' : totalBayar > 0 ? 'Sebagian' : 'Belum Lunas';
+                      const statusCls = sisa <= 0 ? 'tag-success' : totalBayar > 0 ? 'tag-warning' : 'tag-danger';
 
-                return `
-                  <tr>
-                    <td>
-                      <strong>${escapeHtml(m.nama_lengkap)}</strong>
-                      <div class="meta-line tabular-nums">${escapeHtml(m.npm)}</div>
-                    </td>
-                    <td class="tabular-nums text-success">${formatRupiah(totalBayar)}</td>
-                    <td class="tabular-nums ${sisa > 0 ? 'text-danger' : 'text-success'}">${formatRupiah(sisa)}</td>
-                    <td><span class="status-tag ${sisa > 0 ? 'tag-danger' : 'tag-success'}">${sisa > 0 ? 'Belum Lunas' : 'Aman / Lunas'}</span></td>
-                    <td>
-                      <div class="row-actions">
-                        ${
-                          sisa > 0
-                            ? `<button type="button" class="btn btn-secondary btn-sm btn-remind-wa" data-user="${m.id}" data-nama="${escapeHtml(m.nama_lengkap)}" data-sisa="${sisa}">Ingatkan via WhatsApp</button>
-                               <button type="button" class="btn btn-coral btn-sm btn-remind-portal" data-user="${m.id}" data-nama="${escapeHtml(m.nama_lengkap)}" data-sisa="${sisa}">Notif Portal</button>`
-                            : '<span class="meta-line">Tidak ada tunggakan</span>'
-                        }
-                      </div>
-                    </td>
-                  </tr>
-                `;
-              })
-              .join('')}
+                      return `
+                        <tr>
+                          <td>
+                            <strong>${escapeHtml(m.nama_lengkap)}</strong>
+                            <div class="meta-line tabular-nums">${escapeHtml(m.npm)}</div>
+                          </td>
+                          <td class="tabular-nums text-success">${formatRupiah(totalBayar)}</td>
+                          <td class="tabular-nums ${sisa > 0 ? 'text-danger' : 'text-success'}">${formatRupiah(sisa)}</td>
+                          <td><span class="status-tag ${statusCls}">${statusTxt}</span></td>
+                          <td>
+                            <div class="row-actions">
+                              ${
+                                sisa > 0
+                                  ? `<button type="button" class="btn btn-secondary btn-sm btn-remind-wa" data-user="${m.id}" data-nama="${escapeHtml(m.nama_lengkap)}" data-sisa="${sisa}">Ingatkan via WhatsApp</button>
+                                     <button type="button" class="btn btn-coral btn-sm btn-remind-portal" data-user="${m.id}" data-nama="${escapeHtml(m.nama_lengkap)}" data-sisa="${sisa}">Notif Portal</button>`
+                                  : '<span class="meta-line">Tidak ada tunggakan</span>'
+                              }
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    })
+                    .join('')
+            }
           </tbody>
         </table>
       </div>
@@ -5214,6 +6453,13 @@ function renderDaftarPembayaranView() {
 
 function bindDaftarPembayaranEvents() {
   bindImagePreviewButtons();
+  bindLiveSearchInput('filter-pembayaran-search', (val) => {
+    state.filters.pembayaranSearch = val;
+  });
+  document.getElementById('filter-pembayaran-status')?.addEventListener('change', (e) => {
+    state.filters.pembayaranStatus = e.target.value;
+    renderActiveTab();
+  });
 
  document.querySelectorAll('.btn-acc-kas').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -5222,10 +6468,10 @@ function bindDaftarPembayaranEvents() {
       if (!bill) return;
       const mhs = state.profiles.find((p) => p.id === bill.user_id);
 
-      const cicilanBaru = Number(bill.nominal_dibayar || 0);
-      const sudahBayarSebelumnya = Number(bill.nominal_terverifikasi || 0);
-      const totalTerbayar = sudahBayarSebelumnya + cicilanBaru;
+      const cicilanBaru = getBillPendingAmount(bill);
+      const sudahBayarSebelumnya = getBillVerifiedPaid(bill);
       const tagihan = Number(bill.nominal_tagihan || 0);
+      const totalTerbayar = Math.min(tagihan, sudahBayarSebelumnya + cicilanBaru);
       const sisaTunggakan = Math.max(0, tagihan - totalTerbayar);
       const isLunas = sisaTunggakan <= 0;
 
@@ -5234,14 +6480,32 @@ function bindDaftarPembayaranEvents() {
       const verifierId = state.currentUser.id;
 
       try {
-        await db.update('iuran_kas', id, {
-          status: isLunas ? 'Lunas' : 'Belum Lunas',
-          nominal_dibayar: Math.min(tagihan, totalTerbayar),
-          nominal_terverifikasi: Math.min(tagihan, totalTerbayar),
-          verified_by: verifierId,
-          pj_id: verifierId,
-          pj_nama: verifierName,
-        });
+        try {
+          await db.update('iuran_kas', id, {
+            status: isLunas ? 'Lunas' : 'Sebagian',
+            nominal_dibayar: totalTerbayar,
+            nominal_terverifikasi: totalTerbayar,
+            nominal_pending: 0,
+            verified_by: verifierId,
+            pj_id: verifierId,
+            pj_nama: verifierName,
+          });
+        } catch (constraintErr) {
+          const msg = String(constraintErr?.message || '').toLowerCase();
+          if (!isLunas && (msg.includes('check') || msg.includes('iuran_kas_status_check'))) {
+            await db.update('iuran_kas', id, {
+              status: 'Belum Lunas',
+              nominal_dibayar: totalTerbayar,
+              nominal_terverifikasi: totalTerbayar,
+              nominal_pending: 0,
+              verified_by: verifierId,
+              pj_id: verifierId,
+              pj_nama: verifierName,
+            });
+          } else {
+            throw constraintErr;
+          }
+        }
 
         await db.insert('transaksi_kas', {
           jenis: 'Pemasukan',
@@ -5311,14 +6575,15 @@ function bindDaftarPembayaranEvents() {
       const senderName = mhs?.nama_lengkap || 'Mahasiswa';
       const verifierName = state.currentUser.nama_lengkap;
       const verifierId = state.currentUser.id;
-      // Kembalikan nominal_dibayar ke saldo cicilan yang sudah terverifikasi sebelumnya
-      const saldoSebelumnya = Number(bill.nominal_terverifikasi || 0);
+      const saldoSebelumnya = getBillVerifiedPaid(bill);
 
       try {
         try {
           await db.update('iuran_kas', id, {
             status: 'Ditolak',
             nominal_dibayar: saldoSebelumnya,
+            nominal_terverifikasi: saldoSebelumnya,
+            nominal_pending: 0,
             pj_id: verifierId,
             pj_nama: verifierName,
           });
@@ -5328,6 +6593,8 @@ function bindDaftarPembayaranEvents() {
             await db.update('iuran_kas', id, {
               status: 'Belum Lunas',
               nominal_dibayar: saldoSebelumnya,
+              nominal_terverifikasi: saldoSebelumnya,
+              nominal_pending: 0,
               metode_bayar: 'Ditolak',
               pj_id: verifierId,
               pj_nama: verifierName,
@@ -5404,24 +6671,19 @@ function bindDaftarPembayaranEvents() {
 }
 
 function getUnpaidBillSisa(bill) {
-  if (!bill || bill.status === 'Lunas') return 0;
-  if (bill.status === 'Menunggu Verifikasi' || bill.status === 'Ditolak') {
-    return Number(bill.nominal_tagihan || 0);
-  }
-  return Math.max(0, Number(bill.nominal_tagihan || 0) - Number(bill.nominal_dibayar || 0));
+  return getBillSisaTunggakan(bill);
 }
 
 function buildWaKasReminderMessage(student, ks) {
   const cfg = state.pengaturan || {};
-  const unpaidBills = (ks.bills || []).filter((b) => b.status !== 'Lunas');
+  const unpaidBills = (ks.bills || []).filter((b) => getBillDisplayStatus(b) !== 'Lunas');
   const lines = unpaidBills.map((b, idx) => {
     const tagihan = Number(b.nominal_tagihan || 0);
-    const sisaBill = getUnpaidBillSisa(b);
-    const statusText =
-      b.status === 'Ditolak' || (b.status === 'Belum Lunas' && b.metode_bayar === 'Ditolak')
-        ? 'Bukti Ditolak'
-        : b.status;
-    return `${idx + 1}. ${b.periode} | Tagihan: ${formatRupiah(tagihan)} | Sisa: ${formatRupiah(sisaBill)} (${statusText})`;
+    const sudahBayar = getBillVerifiedPaid(b);
+    const sisaBill = getBillSisaTunggakan(b);
+    const dispStatus = getBillDisplayStatus(b);
+    const statusText = dispStatus === 'Ditolak' ? 'Bukti Ditolak' : dispStatus;
+    return `${idx + 1}. ${b.periode} | Tagihan: ${formatRupiah(tagihan)} | Terbayar: ${formatRupiah(sudahBayar)} | Sisa: ${formatRupiah(sisaBill)} (${statusText})`;
   });
 
   const issuer = state.currentUser?.nama_lengkap || 'Pengurus Kas Kelas';
@@ -5451,7 +6713,7 @@ function buildWaKasReminderMessage(student, ks) {
 
 function generateKasReminderProofPng(student, ks) {
   const cfg = state.pengaturan || {};
-  const unpaidBills = (ks.bills || []).filter((b) => b.status !== 'Lunas');
+  const unpaidBills = (ks.bills || []).filter((b) => getBillDisplayStatus(b) !== 'Lunas');
   const maxVisible = 8;
   const visibleBills = unpaidBills.slice(0, maxVisible);
   const extraCount = Math.max(0, unpaidBills.length - maxVisible);
@@ -5577,13 +6839,16 @@ function generateKasReminderProofPng(student, ks) {
       ctx.strokeRect(38, ty, W - 76, 42);
 
       const tagihan = Number(b.nominal_tagihan || 0);
-      const terbayar = b.status === 'Menunggu Verifikasi' || b.status === 'Ditolak' ? 0 : Number(b.nominal_dibayar || 0);
-      const sisaBill = getUnpaidBillSisa(b);
+      const terbayar = getBillVerifiedPaid(b);
+      const sisaBill = getBillSisaTunggakan(b);
+      const dispStatus = getBillDisplayStatus(b);
       const statusTxt =
-        b.status === 'Ditolak' || (b.status === 'Belum Lunas' && b.metode_bayar === 'Ditolak')
+        dispStatus === 'Ditolak'
           ? 'Ditolak'
-          : b.status === 'Menunggu Verifikasi'
+          : dispStatus === 'Menunggu Verifikasi'
           ? 'Menunggu'
+          : dispStatus === 'Sebagian'
+          ? 'Sebagian'
           : 'Blm Lunas';
 
       ctx.fillStyle = '#0f172a';
@@ -5718,7 +6983,7 @@ function openWaReminderModal(studentId) {
   }
 
   // Lampiran bukti terkait (jika sebelumnya ada tagihan ditolak / pending dengan foto bukti)
-  const billsWithProof = (ks.bills || []).filter((b) => b.status !== 'Lunas' && b.bukti_url);
+  const billsWithProof = (ks.bills || []).filter((b) => getBillDisplayStatus(b) !== 'Lunas' && b.bukti_url);
   const attachBox = document.getElementById('wa-rejected-attachments');
   const attachList = document.getElementById('wa-rejected-attachments-list');
   if (attachBox && attachList) {
@@ -6016,14 +7281,13 @@ function bindBukuKasEvents() {
         let remaining = nominal;
         const nowIso = new Date().toISOString();
         const studentUnpaidBills = [...state.iuranKas]
-          .filter((i) => i.user_id === selectedStudent.id && i.status !== 'Lunas')
+          .filter((i) => i.user_id === selectedStudent.id && getBillDisplayStatus(i) !== 'Lunas')
           .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
 
         for (const bill of studentUnpaidBills) {
           if (remaining <= 0) break;
           const tagihan = Number(bill.nominal_tagihan || 0);
-          const alreadyPaid =
-            bill.status === 'Menunggu Verifikasi' ? 0 : Math.max(0, Number(bill.nominal_dibayar || 0));
+          const alreadyPaid = getBillVerifiedPaid(bill);
           const need = Math.max(0, tagihan - alreadyPaid);
           if (need <= 0) continue;
 
@@ -6031,6 +7295,8 @@ function bindBukuKasEvents() {
             await db.update('iuran_kas', bill.id, {
               status: 'Lunas',
               nominal_dibayar: tagihan,
+              nominal_terverifikasi: tagihan,
+              nominal_pending: 0,
               metode_bayar: 'Tunai',
               tanggal_bayar: nowIso,
               verified_by: pjId,
@@ -6039,13 +7305,35 @@ function bindBukuKasEvents() {
             });
             remaining -= need;
           } else {
-            await db.update('iuran_kas', bill.id, {
-              nominal_dibayar: alreadyPaid + remaining,
-              metode_bayar: 'Tunai',
-              tanggal_bayar: nowIso,
-              pj_id: pjId,
-              pj_nama: pjNama,
-            });
+            const nextPaid = alreadyPaid + remaining;
+            try {
+              await db.update('iuran_kas', bill.id, {
+                status: 'Sebagian',
+                nominal_dibayar: nextPaid,
+                nominal_terverifikasi: nextPaid,
+                nominal_pending: 0,
+                metode_bayar: 'Tunai',
+                tanggal_bayar: nowIso,
+                pj_id: pjId,
+                pj_nama: pjNama,
+              });
+            } catch (constraintErr) {
+              const msg = String(constraintErr?.message || '').toLowerCase();
+              if (msg.includes('check') || msg.includes('iuran_kas_status_check')) {
+                await db.update('iuran_kas', bill.id, {
+                  status: 'Belum Lunas',
+                  nominal_dibayar: nextPaid,
+                  nominal_terverifikasi: nextPaid,
+                  nominal_pending: 0,
+                  metode_bayar: 'Tunai',
+                  tanggal_bayar: nowIso,
+                  pj_id: pjId,
+                  pj_nama: pjNama,
+                });
+              } else {
+                throw constraintErr;
+              }
+            }
             remaining = 0;
           }
         }
@@ -6057,6 +7345,8 @@ function bindBukuKasEvents() {
             periode: `Setoran Kas - ${monthText}`,
             nominal_tagihan: remaining,
             nominal_dibayar: remaining,
+            nominal_terverifikasi: remaining,
+            nominal_pending: 0,
             metode_bayar: 'Tunai',
             bukti_url: notaUrl || '',
             status: 'Lunas',
@@ -6114,7 +7404,7 @@ function bindBukuKasEvents() {
 // 15. VIEW ADMIN UTAMA: MATRIKS EXCEL, MONITORING LAPORAN, KELOLA AKUN & REKENING
 // ----------------------------------------------------------------------------
 function buildAttendanceMatrixData() {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const sessions = [...state.sesiAbsensi].sort((a, b) => a.pertemuan_ke - b.pertemuan_ke);
 
   return {
@@ -6146,23 +7436,9 @@ function getStudentAttendanceStats(studentId) {
 
 function getStudentKasStats(studentId) {
   const bills = state.iuranKas.filter((i) => i.user_id === studentId);
-  const sudahBayar = bills.reduce((sum, i) => {
-    if (i.status === 'Lunas') {
-      return sum + Number(i.nominal_dibayar || i.nominal_tagihan || 0);
-    }
-    if (i.status === 'Belum Lunas') {
-      return sum + Math.min(Number(i.nominal_tagihan || 0), Math.max(0, Number(i.nominal_dibayar || 0)));
-    }
-    return sum;
-  }, 0);
-  const tunggakan = bills.reduce((sum, i) => {
-    if (i.status === 'Lunas') return sum;
-    if (i.status === 'Menunggu Verifikasi' || i.status === 'Ditolak') {
-      return sum + Number(i.nominal_tagihan || 0);
-    }
-    return sum + Math.max(0, Number(i.nominal_tagihan || 0) - Number(i.nominal_dibayar || 0));
-  }, 0);
-  const totalTagihan = sudahBayar + tunggakan;
+  const totalTagihan = bills.reduce((sum, i) => sum + Number(i.nominal_tagihan || 0), 0);
+  const sudahBayar = bills.reduce((sum, i) => sum + getBillVerifiedPaid(i), 0);
+  const tunggakan = bills.reduce((sum, i) => sum + getBillSisaTunggakan(i), 0);
   const pctBayar = totalTagihan > 0 ? Math.round((sudahBayar / totalTagihan) * 100) : 100;
   const pctTunggak = totalTagihan > 0 ? 100 - pctBayar : 0;
   return {
@@ -6177,7 +7453,7 @@ function getStudentKasStats(studentId) {
 }
 
 function renderStudentAttendanceDiagramSection() {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   if (students.length === 0) {
     return `<div class="card glass-panel" style="margin-bottom:20px;"><p class="meta-line">Belum ada mahasiswa untuk diagram absensi.</p></div>`;
   }
@@ -6350,11 +7626,11 @@ function renderStudentKasDiagramSection() {
                   <div class="student-bar-head">
                     <strong>
                       ${escapeHtml(m.nama_lengkap)}
-                      <span class="status-tag ${ks.isLunas ? 'tag-success' : 'tag-danger'}" style="margin-left:6px;">
-                        ${ks.isLunas ? 'Sudah Lunas' : 'Belum Lunas'}
+                      <span class="status-tag ${ks.isLunas ? 'tag-success' : ks.sudahBayar > 0 ? 'tag-warning' : 'tag-danger'}" style="margin-left:6px;">
+                        ${ks.isLunas ? 'Sudah Lunas' : ks.sudahBayar > 0 ? 'Sebagian' : 'Belum Lunas'}
                       </span>
                     </strong>
-                    <span class="tabular-nums ${ks.isLunas ? 'text-success' : 'text-danger'}">
+                    <span class="tabular-nums ${ks.isLunas ? 'text-success' : ks.sudahBayar > 0 ? 'text-warning' : 'text-danger'}">
                       ${formatRupiah(ks.sudahBayar)} (${ks.pctBayar}%)
                     </span>
                   </div>
@@ -6380,7 +7656,7 @@ function renderStudentKasDiagramSection() {
                 <strong>${escapeHtml(selectedStudent?.nama_lengkap || '-')}</strong>
                 <span class="meta-line tabular-nums">NPM: ${escapeHtml(selectedStudent?.npm || '-')}</span>
               </div>
-              <span class="status-tag ${st.isLunas ? 'tag-success' : 'tag-danger'}">${st.isLunas ? 'Sudah Lunas' : 'Belum Lunas'}</span>
+              <span class="status-tag ${st.isLunas ? 'tag-success' : st.sudahBayar > 0 ? 'tag-warning' : 'tag-danger'}">${st.isLunas ? 'Sudah Lunas' : st.sudahBayar > 0 ? 'Sebagian' : 'Belum Lunas'}</span>
             </div>
             ${segs
               .map(
@@ -6431,7 +7707,7 @@ function bindStudentDiagramEvents() {
 }
 
 function buildGroupedAttendanceMatrix() {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const sessions = [...state.sesiAbsensi].sort(
     (a, b) =>
       Number(a.pertemuan_ke || 0) - Number(b.pertemuan_ke || 0) ||
@@ -6580,8 +7856,31 @@ function buildKasPeriodMatrix() {
   const rows = students.map((m) => {
     const ks = getStudentKasStats(m.id);
     const slotCells = orderedSlots.map((slot) => {
-      const bill = state.iuranKas.find((i) => i.user_id === m.id && i.periode === slot.periode) || null;
-      return { slot, bill };
+      const bills = state.iuranKas.filter(
+        (i) => i.user_id === m.id && String(i.periode || '').trim() === slot.periode
+      );
+      const tagihan = bills.reduce((s, b) => s + Number(b.nominal_tagihan || 0), 0);
+      const paid = bills.reduce((s, b) => s + getBillVerifiedPaid(b), 0);
+      const sisa = bills.reduce((s, b) => s + getBillSisaTunggakan(b), 0);
+      const hasPending = bills.some((b) => getBillDisplayStatus(b) === 'Menunggu Verifikasi');
+      const hasRejected = bills.some((b) => getBillDisplayStatus(b) === 'Ditolak');
+      let dispStatus = '-';
+      if (bills.length > 0) {
+        if (sisa <= 0 && !hasPending) dispStatus = 'Lunas';
+        else if (hasPending) dispStatus = 'Menunggu Verifikasi';
+        else if (hasRejected && paid === 0) dispStatus = 'Ditolak';
+        else if (paid > 0 && sisa > 0) dispStatus = 'Sebagian';
+        else dispStatus = 'Belum Lunas';
+      }
+      return {
+        slot,
+        bills,
+        bill: bills[0] || null,
+        tagihan,
+        paid,
+        sisa,
+        dispStatus,
+      };
     });
     return {
       student: m,
@@ -6608,9 +7907,60 @@ function renderMonitoringExcelView() {
   const { monthGroups, orderedSlots, rows: kasRows } = buildKasPeriodMatrix();
   const kasMembers = state.profiles.filter((p) => isKasMemberRole(p.role));
 
-  const totalKasDibayarClass = kasRows.reduce((s, r) => s + r.totalDibayar, 0);
-  const totalKasTunggakanClass = kasRows.reduce((s, r) => s + r.tunggakan, 0);
-  const totalKasLunasCount = kasRows.filter((r) => r.isLunas).length;
+  const qAbsenMhs = (state.filters.matrixAbsenSearch || '').trim().toLowerCase();
+  const qAbsenMatkul = (state.filters.matrixMatkulSearch || '').trim().toLowerCase();
+
+  const indexedSlots = absenSlots.map((sl, idx) => ({ ...sl, _idx: idx }));
+  const filteredGroups = qAbsenMatkul
+    ? groups
+        .map((g) => {
+          const matchingSlots = indexedSlots.filter(
+            (sl) =>
+              sl.pertemuan === g.pertemuan &&
+              sl.session &&
+              String(sl.label || '').toLowerCase().includes(qAbsenMatkul)
+          );
+          return { ...g, slots: matchingSlots };
+        })
+        .filter((g) => g.slots.length > 0)
+    : groups.map((g) => ({
+        ...g,
+        slots: indexedSlots.filter((sl) => sl.pertemuan === g.pertemuan),
+      }));
+
+  const displayAbsenSlots = filteredGroups.flatMap((g) => g.slots);
+  const filteredAbsenRows = absenRows.filter((r) => {
+    if (!qAbsenMhs) return true;
+    const roleLabel = ROLE_LABELS[r.student.role] || r.student.role || '';
+    const searchable = `${r.student.nama_lengkap || ''} ${r.student.npm || ''} ${roleLabel}`.toLowerCase();
+    return searchable.includes(qAbsenMhs);
+  });
+
+  const qKasMhs = (state.filters.matrixKasSearch || '').trim().toLowerCase();
+  const statusKasFilter = state.filters.matrixKasStatus || 'Semua';
+
+  const filteredKasRows = kasRows.filter((r) => {
+    const statusLabel = r.isLunas ? 'Lunas' : r.totalDibayar > 0 ? 'Sebagian' : 'Belum Lunas';
+    if (statusKasFilter !== 'Semua' && statusLabel !== statusKasFilter) return false;
+    if (!qKasMhs) return true;
+    const roleLabel = ROLE_LABELS[r.student.role] || r.student.role || '';
+    const searchable = `${r.student.nama_lengkap || ''} ${r.student.npm || ''} ${roleLabel} ${statusLabel}`.toLowerCase();
+    return searchable.includes(qKasMhs);
+  });
+
+  const filteredKasMembers = kasMembers.filter((m) => {
+    const ks = getStudentKasStats(m.id);
+    const statusLabel = ks.isLunas ? 'Lunas' : ks.sudahBayar > 0 ? 'Sebagian' : 'Belum Lunas';
+    if (statusKasFilter !== 'Semua' && statusLabel !== statusKasFilter) return false;
+    if (!qKasMhs) return true;
+    const roleLabel = ROLE_LABELS[m.role] || m.role || '';
+    const searchable = `${m.nama_lengkap || ''} ${m.npm || ''} ${roleLabel} ${statusLabel}`.toLowerCase();
+    return searchable.includes(qKasMhs);
+  });
+
+  const totalKasDibayarClass = filteredKasRows.reduce((s, r) => s + r.totalDibayar, 0);
+  const totalKasTunggakanClass = filteredKasRows.reduce((s, r) => s + r.tunggakan, 0);
+  const totalKasLunasCount = filteredKasRows.filter((r) => r.isLunas).length;
 
   const headerButtons = isBendahara
     ? `
@@ -6668,6 +8018,21 @@ function renderMonitoringExcelView() {
                 <h3>Tabel Matriks Absensi Keseluruhan Mahasiswa</h3>
                 <span class="meta-line">Header 2 tingkat: Pertemuan 1 s.d. 14 &amp; nama Mata Kuliah · Klik status untuk Detail foto &amp; GPS</span>
               </div>
+              <span class="status-tag tag-info tabular-nums">${filteredAbsenRows.length}/${absenRows.length} Mahasiswa</span>
+            </div>
+            <div class="toolbar-filters">
+              <input
+                type="search"
+                id="filter-matrix-absen-search"
+                placeholder="Cari absensi mahasiswa (nama, NIM, atau peran)..."
+                value="${escapeHtml(state.filters.matrixAbsenSearch || '')}"
+              />
+              <input
+                type="search"
+                id="filter-matrix-matkul-search"
+                placeholder="Cari mata kuliah pada matriks..."
+                value="${escapeHtml(state.filters.matrixMatkulSearch || '')}"
+              />
             </div>
             <div class="table-wrap table-scroll-5-matrix">
               <table class="grouped-matrix-table">
@@ -6675,42 +8040,57 @@ function renderMonitoringExcelView() {
                   <tr>
                     <th rowspan="2">NIM</th>
                     <th rowspan="2">Nama Mahasiswa</th>
-                    ${groups
-                      .map((g) => `<th colspan="${g.slots.length}">Pertemuan ${g.pertemuan}</th>`)
-                      .join('')}
+                    ${
+                      filteredGroups.length > 0
+                        ? filteredGroups
+                            .map((g) => `<th colspan="${g.slots.length}">Pertemuan ${g.pertemuan}</th>`)
+                            .join('')
+                        : '<th>Mata Kuliah</th>'
+                    }
                     <th rowspan="2">Persentase Hadir</th>
                   </tr>
                   <tr>
-                    ${absenSlots
-                      .map((sl) => `<th class="grouped-matrix-subth">${escapeHtml(sl.label)}</th>`)
-                      .join('')}
+                    ${
+                      displayAbsenSlots.length > 0
+                        ? displayAbsenSlots
+                            .map((sl) => `<th class="grouped-matrix-subth">${escapeHtml(sl.label)}</th>`)
+                            .join('')
+                        : '<th class="grouped-matrix-subth">-</th>'
+                    }
                   </tr>
                 </thead>
                 <tbody>
                   ${
-                    absenRows.length === 0
-                      ? `<tr><td colspan="${3 + absenSlots.length}" class="text-center">Belum ada mahasiswa terdaftar.</td></tr>`
-                      : absenRows
+                    filteredAbsenRows.length === 0
+                      ? `<tr><td colspan="${3 + Math.max(1, displayAbsenSlots.length)}" class="text-center">${absenRows.length === 0 ? 'Belum ada mahasiswa terdaftar.' : 'Tidak ada data absensi mahasiswa yang cocok dengan pencarian.'}</td></tr>`
+                      : filteredAbsenRows
                           .map(
-                            (r) => `
+                            (r) => {
+                              const visibleCells = displayAbsenSlots.map((sl) => r.cells[sl._idx]).filter(Boolean);
+                              return `
                         <tr>
                           <td class="tabular-nums">${escapeHtml(r.student.npm)}</td>
                           <td><strong>${escapeHtml(r.student.nama_lengkap)}</strong></td>
-                          ${r.cells
-                            .map((c) => {
-                              if (c.record) {
-                                return `<td class="grouped-matrix-cell-center">
-                                  <button type="button" class="status-tag ${getStatusTagClass(c.label)} btn-detail-absen" style="cursor:pointer;" data-absen-id="${c.record.id}" data-sesi-id="${c.session.id}" title="Klik untuk melihat foto, PJ, dan GPS">
-                                    ${escapeHtml(c.label)}
-                                  </button>
-                                </td>`;
-                              }
-                              return `<td class="grouped-matrix-cell-center"><span class="${c.label === '-' ? 'meta-line' : `status-tag ${getStatusTagClass(c.label)}`}">${escapeHtml(c.label)}</span></td>`;
-                            })
-                            .join('')}
+                          ${
+                            displayAbsenSlots.length === 0
+                              ? '<td class="grouped-matrix-cell-center"><span class="meta-line">-</span></td>'
+                              : visibleCells
+                                  .map((c) => {
+                                    if (c.record) {
+                                      return `<td class="grouped-matrix-cell-center">
+                                        <button type="button" class="status-tag ${getStatusTagClass(c.label)} btn-detail-absen" style="cursor:pointer;" data-absen-id="${c.record.id}" data-sesi-id="${c.session.id}" title="Klik untuk melihat foto, PJ, dan GPS">
+                                          ${escapeHtml(c.label)}
+                                        </button>
+                                      </td>`;
+                                    }
+                                    return `<td class="grouped-matrix-cell-center"><span class="${c.label === '-' ? 'meta-line' : `status-tag ${getStatusTagClass(c.label)}`}">${escapeHtml(c.label)}</span></td>`;
+                                  })
+                                  .join('')
+                          }
                           <td class="tabular-nums grouped-matrix-cell-center" title="${r.hadirCount}/${orderedSessions.length} sesi hadir"><strong>${r.pctHadir}%</strong></td>
                         </tr>
-                      `
+                      `;
+                            }
                           )
                           .join('')
                   }
@@ -6734,6 +8114,21 @@ function renderMonitoringExcelView() {
                 <h3>Tabel Matriks Kas Per Periode</h3>
                 <span class="meta-line">Rincian pembayaran iuran kas per bulan &amp; minggu (1, 2, 3, 4) beserta total dibayar, tunggakan, &amp; status kelas</span>
               </div>
+              <span class="status-tag tag-info tabular-nums">${filteredKasRows.length}/${kasRows.length} Mahasiswa</span>
+            </div>
+            <div class="toolbar-filters">
+              <input
+                type="search"
+                id="filter-matrix-kas-search"
+                placeholder="Cari daftar kas mahasiswa (nama, NIM, atau peran)..."
+                value="${escapeHtml(state.filters.matrixKasSearch || '')}"
+              />
+              <select id="filter-matrix-kas-status" aria-label="Filter status kas">
+                <option value="Semua" ${statusKasFilter === 'Semua' ? 'selected' : ''}>Semua Status Kas</option>
+                <option value="Belum Lunas" ${statusKasFilter === 'Belum Lunas' ? 'selected' : ''}>Belum Lunas</option>
+                <option value="Sebagian" ${statusKasFilter === 'Sebagian' ? 'selected' : ''}>Sebagian (Cicilan)</option>
+                <option value="Lunas" ${statusKasFilter === 'Lunas' ? 'selected' : ''}>Lunas</option>
+              </select>
             </div>
             <div class="table-wrap table-scroll-5-matrix">
               <table class="grouped-matrix-table">
@@ -6767,9 +8162,9 @@ function renderMonitoringExcelView() {
                 </thead>
                 <tbody>
                   ${
-                    kasRows.length === 0
-                      ? `<tr><td colspan="${5 + Math.max(1, orderedSlots.length)}" class="text-center">Belum ada data kas mahasiswa.</td></tr>`
-                      : kasRows
+                    filteredKasRows.length === 0
+                      ? `<tr><td colspan="${5 + Math.max(1, orderedSlots.length)}" class="text-center">${kasRows.length === 0 ? 'Belum ada data kas mahasiswa.' : 'Tidak ada data kas mahasiswa yang cocok dengan pencarian.'}</td></tr>`
+                      : filteredKasRows
                           .map(
                             (r) => `
                         <tr>
@@ -6780,27 +8175,29 @@ function renderMonitoringExcelView() {
                               ? '<td class="grouped-matrix-cell-center"><span class="meta-line">-</span></td>'
                               : r.slotCells
                                   .map((sc) => {
-                                    const b = sc.bill;
-                                    if (!b) return '<td class="grouped-matrix-cell-center"><span class="meta-line">-</span></td>';
-                                    if (b.status === 'Lunas') {
-                                      return `<td class="tabular-nums text-success grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)}"><strong>${formatRupiah(b.nominal_dibayar || b.nominal_tagihan)}</strong></td>`;
+                                    if (!sc.bills || sc.bills.length === 0) {
+                                      return '<td class="grouped-matrix-cell-center"><span class="meta-line">-</span></td>';
                                     }
-                                    if (b.status === 'Menunggu Verifikasi') {
-                                      return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)}"><span class="status-tag tag-coral">Menunggu</span></td>`;
+                                    const { paid, tagihan, sisa, dispStatus } = sc;
+                                    if (dispStatus === 'Lunas') {
+                                      return `<td class="tabular-nums text-success grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)} · Lunas"><strong>${formatRupiah(paid || tagihan)}</strong></td>`;
                                     }
-                                    if (b.status === 'Ditolak') {
-                                      return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)}"><span class="status-tag tag-danger">Ditolak</span></td>`;
+                                    if (dispStatus === 'Menunggu Verifikasi') {
+                                      return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)} · Menunggu ACC"><span class="status-tag tag-coral">Menunggu</span>${paid > 0 ? `<div class="meta-line tabular-nums text-success">${formatRupiah(paid)}</div>` : ''}${sisa > 0 ? `<div class="meta-line tabular-nums text-danger">Sisa ${formatRupiah(sisa)}</div>` : ''}</td>`;
                                     }
-                                    if (Number(b.nominal_dibayar || 0) > 0) {
-                                      return `<td class="tabular-nums text-warning grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)}">${formatRupiah(b.nominal_dibayar)}</td>`;
+                                    if (dispStatus === 'Ditolak') {
+                                      return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)} · Bukti Ditolak"><span class="status-tag tag-danger">Ditolak</span>${paid > 0 ? `<div class="meta-line tabular-nums">${formatRupiah(paid)}</div>` : ''}${sisa > 0 ? `<div class="meta-line tabular-nums text-danger">Sisa ${formatRupiah(sisa)}</div>` : ''}</td>`;
                                     }
-                                    return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)}"><span class="meta-line">-</span></td>`;
+                                    if (paid > 0 && sisa > 0) {
+                                      return `<td class="tabular-nums text-warning grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)} · Cicilan (Sisa ${formatRupiah(sisa)})"><strong>${formatRupiah(paid)}</strong><div class="meta-line text-danger">Sisa ${formatRupiah(sisa)}</div></td>`;
+                                    }
+                                    return `<td class="grouped-matrix-cell-center" title="${escapeHtml(sc.slot.periode)} · Tagihan ${formatRupiah(tagihan)}"><span class="meta-line text-danger">Sisa ${formatRupiah(sisa)}</span></td>`;
                                   })
                                   .join('')
                           }
                           <td class="tabular-nums text-success grouped-matrix-cell-center"><strong>${formatRupiah(r.totalDibayar)}</strong></td>
                           <td class="tabular-nums ${r.tunggakan > 0 ? 'text-danger' : 'text-success'} grouped-matrix-cell-center"><strong>${formatRupiah(r.tunggakan)}</strong></td>
-                          <td class="grouped-matrix-cell-center"><span class="status-tag ${r.isLunas ? 'tag-success' : 'tag-danger'}">${r.isLunas ? 'Lunas' : 'Belum Lunas'}</span></td>
+                          <td class="grouped-matrix-cell-center"><span class="status-tag ${r.isLunas ? 'tag-success' : r.totalDibayar > 0 ? 'tag-warning' : 'tag-danger'}">${r.isLunas ? 'Lunas' : r.totalDibayar > 0 ? 'Sebagian' : 'Belum Lunas'}</span></td>
                         </tr>
                       `
                           )
@@ -6808,14 +8205,14 @@ function renderMonitoringExcelView() {
                   }
                 </tbody>
                 ${
-                  kasRows.length > 0
+                  filteredKasRows.length > 0
                     ? `
                       <tfoot>
                         <tr class="grouped-matrix-tfoot">
-                          <td colspan="${2 + Math.max(1, orderedSlots.length)}"><strong>Total Akumulasi Kas Kelas (${kasRows.length} Mahasiswa)</strong></td>
+                          <td colspan="${2 + Math.max(1, orderedSlots.length)}"><strong>Total Akumulasi Kas Kelas (${filteredKasRows.length} Mahasiswa)</strong></td>
                           <td class="tabular-nums text-success grouped-matrix-cell-center"><strong>${formatRupiah(totalKasDibayarClass)}</strong></td>
                           <td class="tabular-nums ${totalKasTunggakanClass > 0 ? 'text-danger' : 'text-success'} grouped-matrix-cell-center"><strong>${formatRupiah(totalKasTunggakanClass)}</strong></td>
-                          <td class="grouped-matrix-cell-center"><strong>${totalKasLunasCount}/${kasRows.length} Lunas</strong></td>
+                          <td class="grouped-matrix-cell-center"><strong>${totalKasLunasCount}/${filteredKasRows.length} Lunas</strong></td>
                         </tr>
                       </tfoot>
                     `
@@ -6832,6 +8229,7 @@ function renderMonitoringExcelView() {
                 <h3>Tabel Kas Per Mahasiswa</h3>
                 <span class="meta-line">Rekap total uang kas keseluruhan mahasiswa (NIM, Nama Mahasiswa, Total Dibayar, Tunggakan, Status)</span>
               </div>
+              <span class="status-tag tag-info tabular-nums">${filteredKasMembers.length}/${kasMembers.length} Mahasiswa</span>
             </div>
             <div class="table-wrap table-scroll-5-compact">
               <table>
@@ -6846,9 +8244,9 @@ function renderMonitoringExcelView() {
                 </thead>
                 <tbody>
                   ${
-                    kasMembers.length === 0
-                      ? '<tr><td colspan="5" class="text-center">Belum ada mahasiswa terdaftar.</td></tr>'
-                      : kasMembers
+                    filteredKasMembers.length === 0
+                      ? `<tr><td colspan="5" class="text-center">${kasMembers.length === 0 ? 'Belum ada mahasiswa terdaftar.' : 'Tidak ada data kas mahasiswa yang cocok dengan pencarian.'}</td></tr>`
+                      : filteredKasMembers
                           .map((m) => {
                             const ks = getStudentKasStats(m.id);
                             return `
@@ -6857,7 +8255,7 @@ function renderMonitoringExcelView() {
                                 <td><strong>${escapeHtml(m.nama_lengkap)}</strong></td>
                                 <td class="tabular-nums text-success"><strong>${formatRupiah(ks.sudahBayar)}</strong></td>
                                 <td class="tabular-nums ${ks.tunggakan > 0 ? 'text-danger' : 'text-success'}"><strong>${ks.tunggakan > 0 ? formatRupiah(ks.tunggakan) : '-'}</strong></td>
-                                <td><span class="status-tag ${ks.isLunas ? 'tag-success' : 'tag-danger'}">${ks.isLunas ? 'Lunas' : 'Belum Lunas'}</span></td>
+                                <td><span class="status-tag ${ks.isLunas ? 'tag-success' : ks.sudahBayar > 0 ? 'tag-warning' : 'tag-danger'}">${ks.isLunas ? 'Lunas' : ks.sudahBayar > 0 ? 'Sebagian' : 'Belum Lunas'}</span></td>
                               </tr>
                             `;
                           })
@@ -6875,6 +8273,19 @@ function renderMonitoringExcelView() {
 
 function bindMonitoringExcelEvents() {
   bindStudentDiagramEvents();
+  bindLiveSearchInput('filter-matrix-absen-search', (val) => {
+    state.filters.matrixAbsenSearch = val;
+  });
+  bindLiveSearchInput('filter-matrix-matkul-search', (val) => {
+    state.filters.matrixMatkulSearch = val;
+  });
+  bindLiveSearchInput('filter-matrix-kas-search', (val) => {
+    state.filters.matrixKasSearch = val;
+  });
+  document.getElementById('filter-matrix-kas-status')?.addEventListener('change', (e) => {
+    state.filters.matrixKasStatus = e.target.value;
+    renderActiveTab();
+  });
   document.querySelectorAll('.btn-detail-absen').forEach((btn) => {
     btn.addEventListener('click', () => {
       openDetailAbsenModal(
@@ -6950,7 +8361,7 @@ function bindMonitoringExcelEvents() {
 
   const getStudentRekapObjects = () => {
     return state.profiles
-      .filter((p) => isStudentRole(p.role))
+      .filter((p) => isClassMemberRole(p.role))
       .map((m) => {
         const st = getStudentAttendanceStats(m.id);
         return {
@@ -6976,7 +8387,7 @@ function bindMonitoringExcelEvents() {
           'Nama Mahasiswa': m.nama_lengkap,
           'Total Dibayar': ks.sudahBayar,
           Tunggakan: ks.tunggakan,
-          Status: ks.isLunas ? 'Lunas' : 'Belum Lunas',
+          Status: ks.isLunas ? 'Lunas' : ks.sudahBayar > 0 ? 'Sebagian' : 'Belum Lunas',
         };
       });
   };
@@ -6992,7 +8403,7 @@ function bindMonitoringExcelEvents() {
           'Periode Kas': 'Belum ada tagihan',
           'Total Dibayar': r.totalDibayar,
           Tunggakan: r.tunggakan,
-          Status: r.isLunas ? 'Lunas' : 'Belum Lunas',
+          Status: r.isLunas ? 'Lunas' : r.totalDibayar > 0 ? 'Sebagian' : 'Belum Lunas',
         })),
       };
     }
@@ -7031,15 +8442,15 @@ function bindMonitoringExcelEvents() {
     const dataRows = rows.map((r) => [
       r.student.npm,
       r.student.nama_lengkap,
-      ...r.slotCells.map(({ bill }) => {
-        if (!bill) return 0;
-        if (bill.status === 'Menunggu Verifikasi') return 'Menunggu';
-        if (bill.status === 'Ditolak') return 'Ditolak';
-        return Number(bill.nominal_dibayar || 0);
+      ...r.slotCells.map((sc) => {
+        if (!sc.bills || sc.bills.length === 0) return 0;
+        if (sc.dispStatus === 'Menunggu Verifikasi' && sc.paid === 0) return 'Menunggu';
+        if (sc.dispStatus === 'Ditolak' && sc.paid === 0) return 'Ditolak';
+        return sc.paid;
       }),
       r.totalDibayar,
       r.tunggakan,
-      r.isLunas ? 'Lunas' : 'Belum Lunas',
+      r.isLunas ? 'Lunas' : r.totalDibayar > 0 ? 'Sebagian' : 'Belum Lunas',
     ]);
     const totalDibayarAll = rows.reduce((s, r) => s + r.totalDibayar, 0);
     const totalTunggakanAll = rows.reduce((s, r) => s + r.tunggakan, 0);
@@ -7049,8 +8460,8 @@ function bindMonitoringExcelEvents() {
       `${rows.length} Mahasiswa`,
       ...orderedSlots.map((sl) =>
         state.iuranKas
-          .filter((b) => b.periode === sl.periode && (b.status === 'Lunas' || b.status === 'Belum Lunas'))
-          .reduce((s, b) => s + Number(b.nominal_dibayar || 0), 0)
+          .filter((b) => String(b.periode || '').trim() === sl.periode)
+          .reduce((s, b) => s + getBillVerifiedPaid(b), 0)
       ),
       totalDibayarAll,
       totalTunggakanAll,
@@ -7553,9 +8964,7 @@ function renderLaporanPdfView() {
   const isKetua = role === 'ketua';
   const isBendahara = role === 'bendahara';
 
-  const students = state.profiles.filter((p) =>
-    isBendahara || isAdmin ? isKasMemberRole(p.role) : isStudentRole(p.role)
-  );
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const monthVal = state.filters.pdfMonth || getWibDateKey(new Date()).slice(0, 7);
   const selectedStudent =
     students.some((s) => s.id === state.filters.pdfStudentId)
@@ -8600,7 +10009,7 @@ function pdfStatusCell(label) {
   if (str === 'Hadir' || str === 'Lunas') {
     return { content: str, styles: { textColor: [22, 163, 74], fontStyle: 'bold', halign: 'center' } };
   }
-  if (str === 'Izin') {
+  if (str === 'Izin' || str === 'Sebagian') {
     return { content: str, styles: { textColor: [217, 119, 6], fontStyle: 'bold', halign: 'center' } };
   }
   if (str === 'Sakit') {
@@ -8613,7 +10022,7 @@ function pdfStatusCell(label) {
 }
 
 function buildAbsensiKeseluruhanPdfConfig(sessionsList) {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const sessions = [...sessionsList].sort(
     (a, b) => Number(a.pertemuan_ke || 0) - Number(b.pertemuan_ke || 0)
   );
@@ -8707,10 +10116,9 @@ function buildKasPeriodPdfConfig() {
   const body = rows.map((r) => [
     { content: r.student.npm, styles: { fontStyle: 'bold', halign: 'center' } },
     { content: r.student.nama_lengkap, styles: { halign: 'left' } },
-    ...r.slotCells.map(({ bill }) => {
-      if (!bill) return '-';
-      const paid = Number(bill.nominal_dibayar || 0);
-      return paid > 0 ? formatRupiah(paid) : '-';
+    ...r.slotCells.map((sc) => {
+      if (!sc.bills || sc.bills.length === 0) return '-';
+      return sc.paid > 0 ? formatRupiah(sc.paid) : '-';
     }),
   ]);
 
@@ -8735,7 +10143,7 @@ function buildTotalUangKeseluruhanPdfConfig() {
       { content: m.nama_lengkap, styles: { halign: 'left' } },
       { content: formatRupiah(ks.sudahBayar), styles: { fontStyle: 'bold', halign: 'center' } },
       { content: ks.tunggakan > 0 ? formatRupiah(ks.tunggakan) : '-', styles: { halign: 'center' } },
-      pdfStatusCell(ks.isLunas ? 'Lunas' : 'Blm Lunas'),
+      pdfStatusCell(ks.isLunas ? 'Lunas' : ks.sudahBayar > 0 ? 'Sebagian' : 'Blm Lunas'),
     ];
   });
 
@@ -8876,17 +10284,20 @@ function buildPerStudentKasPdfConfig(studentId) {
   const body = groups.map((g) => {
     const sorted = [...g.items].sort((a, b) => a.slotOrder - b.slotOrder);
     const slots = [sorted[0]?.bill, sorted[1]?.bill, sorted[2]?.bill, sorted[3]?.bill];
-    const paidSum = g.items.reduce((s, x) => s + Number(x.bill.nominal_dibayar || 0), 0);
+    const paidSum = g.items.reduce((s, x) => s + getBillVerifiedPaid(x.bill), 0);
     const tagihanSum = g.items.reduce((s, x) => s + Number(x.bill.nominal_tagihan || 0), 0);
     const tunggakanSum = Math.max(0, tagihanSum - paidSum);
-    const isLunas = tunggakanSum === 0 && g.items.every((x) => x.bill.status === 'Lunas');
+    const isLunas = tunggakanSum === 0 && g.items.every((x) => getBillDisplayStatus(x.bill) === 'Lunas');
 
     return [
       { content: g.monthLabel, styles: { fontStyle: 'bold', halign: 'center' } },
-      ...slots.map((b) => (b && Number(b.nominal_dibayar || 0) > 0 ? formatRupiah(b.nominal_dibayar) : '-')),
+      ...slots.map((b) => {
+        const paid = b ? getBillVerifiedPaid(b) : 0;
+        return paid > 0 ? formatRupiah(paid) : '-';
+      }),
       { content: formatRupiah(paidSum), styles: { fontStyle: 'bold', halign: 'center' } },
       tunggakanSum > 0 ? formatRupiah(tunggakanSum) : '-',
-      pdfStatusCell(isLunas ? 'Lunas' : 'Blm Lunas'),
+      pdfStatusCell(isLunas ? 'Lunas' : paidSum > 0 ? 'Sebagian' : 'Blm Lunas'),
     ];
   });
 
@@ -8953,7 +10364,7 @@ function drawPdfCatatanEvaluasi(doc, startY, noteLines = []) {
 }
 
 function buildAutoPdfEvaluationNotes(reportType, ctx = {}) {
-  const students = state.profiles.filter((p) => isStudentRole(p.role));
+  const students = state.profiles.filter((p) => isClassMemberRole(p.role));
   const kasMembers = state.profiles.filter((p) => isKasMemberRole(p.role));
   if (reportType === 'kas_bulanan') {
     const lunasCount = kasMembers.filter((m) => getStudentKasStats(m.id).isLunas).length;

@@ -84,6 +84,44 @@ ALTER TABLE public.sesi_absensi ADD COLUMN IF NOT EXISTS pj_matkul_nama TEXT DEF
 ALTER TABLE public.sesi_absensi ADD COLUMN IF NOT EXISTS mode_kuliah TEXT NOT NULL DEFAULT 'Luring';
 ALTER TABLE public.sesi_absensi ADD COLUMN IF NOT EXISTS link_daring TEXT DEFAULT '';
 
+-- Validasi database: cegah nomor pertemuan ganda atau lebih kecil dari pertemuan tertinggi per mata kuliah
+DO $$
+BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sesi_absensi_matkul_pertemuan_unique
+    ON public.sesi_absensi (LOWER(BTRIM(mata_kuliah)), pertemuan_ke);
+EXCEPTION
+  WHEN others THEN
+    NULL;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.enforce_sequential_sesi_pertemuan()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_max_pertemuan INTEGER;
+BEGIN
+  SELECT COALESCE(MAX(pertemuan_ke), 0)
+  INTO v_max_pertemuan
+  FROM public.sesi_absensi
+  WHERE LOWER(BTRIM(mata_kuliah)) = LOWER(BTRIM(NEW.mata_kuliah));
+
+  IF NEW.pertemuan_ke IS NULL OR NEW.pertemuan_ke <= v_max_pertemuan THEN
+    RAISE EXCEPTION 'Pertemuan ke-% untuk mata kuliah "%" tidak valid. Minimal pertemuan berikutnya adalah ke-%',
+      COALESCE(NEW.pertemuan_ke, 0),
+      NEW.mata_kuliah,
+      v_max_pertemuan + 1
+      USING ERRCODE = '23505';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_enforce_sequential_sesi_pertemuan ON public.sesi_absensi;
+CREATE TRIGGER trg_enforce_sequential_sesi_pertemuan
+  BEFORE INSERT ON public.sesi_absensi
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_sequential_sesi_pertemuan();
+
 -- ============================================================================
 -- 4. TABEL ABSENSI (Foto Watermark, GPS, Timestamp, Manual PJ, Verifikasi)
 -- ============================================================================
@@ -136,9 +174,11 @@ CREATE TABLE IF NOT EXISTS public.iuran_kas (
   periode TEXT NOT NULL,
   nominal_tagihan INTEGER NOT NULL CHECK (nominal_tagihan >= 2000),
   nominal_dibayar INTEGER NOT NULL DEFAULT 0,
+  nominal_terverifikasi INTEGER NOT NULL DEFAULT 0,
+  nominal_pending INTEGER NOT NULL DEFAULT 0,
   metode_bayar TEXT CHECK (metode_bayar IN ('QRIS', 'Transfer Bank', 'Tunai')),
   bukti_url TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'Belum Lunas' CHECK (status IN ('Belum Lunas', 'Menunggu Verifikasi', 'Lunas', 'Ditolak')),
+  status TEXT NOT NULL DEFAULT 'Belum Lunas' CHECK (status IN ('Belum Lunas', 'Sebagian', 'Menunggu Verifikasi', 'Lunas', 'Ditolak')),
   tanggal_bayar TIMESTAMPTZ,
   verified_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   pj_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
@@ -146,10 +186,12 @@ CREATE TABLE IF NOT EXISTS public.iuran_kas (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.iuran_kas ADD COLUMN IF NOT EXISTS nominal_terverifikasi INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.iuran_kas ADD COLUMN IF NOT EXISTS nominal_pending INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.iuran_kas ADD COLUMN IF NOT EXISTS pj_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 ALTER TABLE public.iuran_kas ADD COLUMN IF NOT EXISTS pj_nama TEXT DEFAULT '';
 ALTER TABLE public.iuran_kas DROP CONSTRAINT IF EXISTS iuran_kas_status_check;
-ALTER TABLE public.iuran_kas ADD CONSTRAINT iuran_kas_status_check CHECK (status IN ('Belum Lunas', 'Menunggu Verifikasi', 'Lunas', 'Ditolak'));
+ALTER TABLE public.iuran_kas ADD CONSTRAINT iuran_kas_status_check CHECK (status IN ('Belum Lunas', 'Sebagian', 'Menunggu Verifikasi', 'Lunas', 'Ditolak'));
 
 -- ============================================================================
 -- 7. TABEL TRANSAKSI KAS (Buku Pemasukan & Pengeluaran Transparan)
